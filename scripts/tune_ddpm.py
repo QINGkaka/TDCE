@@ -124,4 +124,4 @@ subprocess.run(['python3.9', f'{pipeline}', '--config', f'{best_config_path}', '
 
 if args.eval_seeds:
     best_exp = str(parent_path / f'{prefix}_best/config.toml')
-    subprocess.run(['python3.9', f'{eval_seeds}', '--config', f'{best_exp}', '10', "ddpm", eval_type, args.eval_model, '5'], check=True)
+    subprocess.run(['python3.9', f'{eval_seeds}', '--config', f'{best_exp}', '10', "tdce", eval_type, args.eval_model, '5'], check=True)

@@ -8,7 +8,6 @@ import os
 import shutil
 import zero
 from sample import sample
-from smote.sample_smote import sample_smote
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.metrics import pairwise_distances
 from pathlib import Path
@@ -119,7 +118,7 @@ def privacy_metrics(real_path,fake_path, data_percent=15):
     return min_dist_rf # , min_dist_rr
 
 def sample_wrapper(method, config, num_samples=None, seed=0):
-    if method == "ddpm":
+    if method in ["tdce", "ddpm"]:  # Support both old and new naming
         sample(
             num_samples=num_samples,
             batch_size=config['sample']['batch_size'],
@@ -136,19 +135,11 @@ def sample_wrapper(method, config, num_samples=None, seed=0):
             change_val=False,
             device=torch.device(config["device"])
         )
-    elif method == "smote":
-        sample_smote(
-            parent_dir=config['parent_dir'],
-            real_data_path=config['real_data_path'],
-            **config['smote_params'],
-            seed=seed,
-            change_val=False
-        )
 
 def resample_privacy(config_path, method, q):
     with tempfile.TemporaryDirectory() as dir_:
         config = lib.load_config(config_path)
-        if method == "ddpm":
+        if method in ["tdce", "ddpm"]:  # Support both old and new naming
             shutil.copy2(os.path.join(config['parent_dir'], 'model.pt'), os.path.join(dir_, 'model.pt'))
         config["parent_dir"] = str(dir_)
         parent_dir = config["parent_dir"]

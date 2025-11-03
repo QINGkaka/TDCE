@@ -11,11 +11,7 @@ from copy import deepcopy
 import shutil
 
 pipeline = {
-    'ddpm': 'scripts/pipeline.py',
-    'smote': 'smote/pipeline_smote.py',
-    'ctabgan': 'CTAB-GAN/pipeline_ctabgan.py',
-    'ctabgan-plus': 'CTAB-GAN-Plus/pipeline_ctabganp.py',
-    'tvae': 'CTGAN/pipeline_tvae.py'
+    'tdce': 'scripts/pipeline.py',  # TDCE (Tabular Diffusion Counterfactual Explanation)
 }
 
 
@@ -23,7 +19,7 @@ def eval_seeds(
     raw_config,
     n_seeds,
     eval_type,
-    sampling_method="ddpm",
+    sampling_method="tdce",
     model_type="simple",
     n_datasets=1,
     dump=True,
@@ -46,12 +42,8 @@ def eval_seeds(
     with tempfile.TemporaryDirectory() as dir_:
         dir_ = Path(dir_)
         temp_config["parent_dir"] = str(dir_)
-        if sampling_method == "ddpm":
+        if sampling_method == "tdce":
             shutil.copy2(parent_dir / "model.pt", temp_config["parent_dir"])
-        elif sampling_method in ["ctabgan", "ctabgan-plus"]:
-            shutil.copy2(parent_dir / "ctabgan.obj", temp_config["parent_dir"])
-        elif sampling_method == "tvae":
-            shutil.copy2(parent_dir / "tvae.obj", temp_config["parent_dir"])
 
         for sample_seed in range(n_datasets):
             temp_config['sample']['seed'] = sample_seed
@@ -108,7 +100,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', metavar='FILE')
     parser.add_argument('n_seeds', type=int, default=10)
-    parser.add_argument('sampling_method', type=str, default="ddpm")
+    parser.add_argument('sampling_method', type=str, default="tdce")
     parser.add_argument('eval_type',  type=str, default='synthetic')
     parser.add_argument('model_type',  type=str, default='catboost')
     parser.add_argument('n_datasets', type=int, default=1)
