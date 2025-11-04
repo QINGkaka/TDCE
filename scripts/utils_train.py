@@ -1,7 +1,12 @@
 import numpy as np
 import os
+import sys
 import lib
-from tab_ddpm.modules import MLPDiffusion, ResNetDiffusion
+
+# Add parent directory to path to import tdce module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tdce.modules import MLPDiffusion, ResNetDiffusion
 
 def get_model(
     model_name,

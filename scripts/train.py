@@ -1,9 +1,14 @@
 from copy import deepcopy
 import torch
 import os
+import sys
 import numpy as np
 import zero
-from tab_ddpm import GaussianMultinomialDiffusion
+
+# Add parent directory to path to import tdce module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tdce import GaussianMultinomialDiffusion
 from utils_train import get_model, make_dataset, update_ema
 import lib
 import pandas as pd
@@ -90,7 +95,11 @@ def train(
     num_numerical_features = 0,
     device = torch.device('cuda:1'),
     seed = 0,
-    change_val = False
+    change_val = False,
+    use_gumbel_softmax = True,
+    tau_init = 1.0,
+    tau_final = 0.3,
+    tau_schedule = 'anneal'
 ):
     real_data_path = os.path.normpath(real_data_path)
     parent_dir = os.path.normpath(parent_dir)
@@ -138,7 +147,11 @@ def train(
         gaussian_loss_type=gaussian_loss_type,
         num_timesteps=num_timesteps,
         scheduler=scheduler,
-        device=device
+        device=device,
+        use_gumbel_softmax=use_gumbel_softmax,
+        tau_init=tau_init,
+        tau_final=tau_final,
+        tau_schedule=tau_schedule
     )
     diffusion.to(device)
     diffusion.train()

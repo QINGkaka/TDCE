@@ -2,14 +2,34 @@ import torch
 import numpy as np
 import zero
 import os
-from tab_ddpm.gaussian_multinomial_diffsuion import GaussianMultinomialDiffusion
-from tab_ddpm.utils import FoundNANsError
+import sys
+
+# Add parent directory to path to import tdce module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tdce.gaussian_multinomial_diffsuion import GaussianMultinomialDiffusion
+from tdce.utils import FoundNANsError
 from utils_train import get_model, make_dataset
 from lib import round_columns
 import lib
 
 def to_good_ohe(ohe, X):
-    indices = np.cumsum([0] + ohe._n_features_outs)
+    # 兼容不同版本的 scikit-learn
+    # 旧版本使用 _n_features_outs，新版本使用 categories_ 计算
+    if hasattr(ohe, '_n_features_outs'):
+        n_features_outs = ohe._n_features_outs
+    elif hasattr(ohe, 'categories_'):
+        # 新版本：categories_ 是一个列表，每个元素对应一个输入特征的所有类别
+        n_features_outs = [len(cats) for cats in ohe.categories_]
+    else:
+        # 如果都没有，尝试从 n_features_out_ 获取
+        # 但这需要知道每个特征有多少类别，所以我们需要其他方法
+        # 或者直接使用 X 的维度来推断
+        # 这里假设每个特征只有一个类别（简化处理）
+        raise AttributeError(f"OneHotEncoder object has no attribute '_n_features_outs' or 'categories_'. "
+                           f"Available attributes: {dir(ohe)}")
+    
+    indices = np.cumsum([0] + n_features_outs)
     Xres = []
     for i in range(1, len(indices)):
         x_ = np.max(X[:, indices[i - 1]:indices[i]], axis=1)

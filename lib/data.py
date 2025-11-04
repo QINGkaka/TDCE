@@ -174,9 +174,14 @@ def change_val(dataset: Dataset, val_size: float = 0.2):
 
 def num_process_nans(dataset: Dataset, policy: Optional[NumNanPolicy]) -> Dataset:
     assert dataset.X_num is not None
+    # Convert '__none__' string to None
+    if policy == '__none__':
+        policy = None
     nan_masks = {k: np.isnan(v) for k, v in dataset.X_num.items()}
     if not any(x.any() for x in nan_masks.values()):  # type: ignore[code]
-        assert policy is None
+        # Allow policy to be None or '__none__' when there are no NaNs
+        if policy is not None and policy != '__none__':
+            raise ValueError(f"Policy should be None when there are no NaNs, but got {policy}")
         return dataset
 
     assert policy is not None
@@ -239,6 +244,9 @@ def normalize(
 
 def cat_process_nans(X: ArrayDict, policy: Optional[CatNanPolicy]) -> ArrayDict:
     assert X is not None
+    # Convert '__none__' string to None
+    if policy == '__none__':
+        policy = None
     nan_masks = {k: v == CAT_MISSING_VALUE for k, v in X.items()}
     if any(x.any() for x in nan_masks.values()):  # type: ignore[code]
         if policy is None:
@@ -250,12 +258,17 @@ def cat_process_nans(X: ArrayDict, policy: Optional[CatNanPolicy]) -> ArrayDict:
         else:
             util.raise_unknown('categorical NaN policy', policy)
     else:
-        assert policy is None
+        # Allow policy to be None or '__none__' when there are no NaNs
+        if policy is not None and policy != '__none__':
+            raise ValueError(f"Policy should be None when there are no NaNs, but got {policy}")
         X_new = X
     return X_new
 
 
 def cat_drop_rare(X: ArrayDict, min_frequency: float) -> ArrayDict:
+    # Convert '__none__' to None - skip if None
+    if min_frequency == '__none__' or min_frequency is None:
+        return X
     assert 0.0 < min_frequency < 1.0
     min_count = round(len(X['train']) * min_frequency)
     X_new = {x: [] for x in X}
@@ -482,7 +495,42 @@ class TabDataset(torch.utils.data.Dataset):
         
         self.X_num = torch.from_numpy(dataset.X_num[split]) if dataset.X_num is not None else None
         self.X_cat = torch.from_numpy(dataset.X_cat[split]) if dataset.X_cat is not None else None
-        self.y = torch.from_numpy(dataset.y[split])
+        
+        # Fix y dtype: convert object array to numeric array if needed
+        y_array = dataset.y[split]
+        if y_array.dtype == np.object_:
+            # String labels - encode to numeric
+            try:
+                # Try to convert to numeric type first
+                y_array = y_array.astype(np.float32)
+            except (ValueError, TypeError):
+                # If conversion fails (e.g., string labels), use LabelEncoder
+                from sklearn.preprocessing import LabelEncoder
+                # Ensure y is 1D
+                if len(y_array.shape) > 1:
+                    y_array = np.squeeze(y_array)
+                # Use LabelEncoder to convert string labels to numeric
+                le = LabelEncoder()
+                # Fit on training split to ensure consistent encoding
+                if split == 'train':
+                    y_array = le.fit_transform(y_array)
+                else:
+                    # For val/test, fit on train split labels first, then transform
+                    y_train = dataset.y['train']
+                    if len(y_train.shape) > 1:
+                        y_train = np.squeeze(y_train)
+                    le.fit(y_train)
+                    y_array = le.transform(y_array)
+                y_array = y_array.astype(np.int64)
+        elif y_array.dtype not in [np.float32, np.float64, np.int32, np.int64]:
+            # Convert to float32 if not a standard numeric type
+            y_array = y_array.astype(np.float32)
+        
+        # Ensure y is 1D
+        if len(y_array.shape) > 1:
+            y_array = np.squeeze(y_array)
+        
+        self.y = torch.from_numpy(y_array).long()
 
         assert self.y is not None
         assert self.X_num is not None or self.X_cat is not None 
@@ -601,8 +649,45 @@ def prepare_fast_dataloader(
         else:
             X = torch.from_numpy(D.X_cat[split]).float()
     else:
+        if D.X_num is None:
+            raise ValueError(f"Dataset has no X_num or X_cat for split '{split}'")
         X = torch.from_numpy(D.X_num[split]).float()
-    y = torch.from_numpy(D.y[split])
+    
+    # Fix y dtype: convert object array to numeric array if needed
+    y_array = D.y[split]
+    if y_array.dtype == np.object_:
+        # String labels - encode to numeric
+        try:
+            # Try to convert to numeric type first
+            y_array = y_array.astype(np.float32)
+        except (ValueError, TypeError):
+            # If conversion fails (e.g., string labels), use LabelEncoder
+            from sklearn.preprocessing import LabelEncoder
+            # Ensure y is 1D
+            if len(y_array.shape) > 1:
+                y_array = np.squeeze(y_array)
+            # Use LabelEncoder to convert string labels to numeric
+            le = LabelEncoder()
+            # Fit on training split to ensure consistent encoding
+            if split == 'train':
+                y_array = le.fit_transform(y_array)
+            else:
+                # For val/test, fit on train split labels first, then transform
+                y_train = D.y['train']
+                if len(y_train.shape) > 1:
+                    y_train = np.squeeze(y_train)
+                le.fit(y_train)
+                y_array = le.transform(y_array)
+            y_array = y_array.astype(np.int64)
+    elif y_array.dtype not in [np.float32, np.float64, np.int32, np.int64]:
+        # Convert to float32 if not a standard numeric type
+        y_array = y_array.astype(np.float32)
+    
+    # Ensure y is 1D
+    if len(y_array.shape) > 1:
+        y_array = np.squeeze(y_array)
+    
+    y = torch.from_numpy(y_array).long()
     dataloader = FastTensorDataLoader(X, y, batch_size=batch_size, shuffle=(split=='train'))
     while True:
         yield from dataloader
@@ -616,7 +701,42 @@ def prepare_fast_torch_dataloader(
         X = torch.from_numpy(np.concatenate([D.X_num[split], D.X_cat[split]], axis=1)).float()
     else:
         X = torch.from_numpy(D.X_num[split]).float()
-    y = torch.from_numpy(D.y[split])
+    
+    # Fix y dtype: convert object array to numeric array if needed
+    y_array = D.y[split]
+    if y_array.dtype == np.object_:
+        # String labels - encode to numeric
+        try:
+            # Try to convert to numeric type first
+            y_array = y_array.astype(np.float32)
+        except (ValueError, TypeError):
+            # If conversion fails (e.g., string labels), use LabelEncoder
+            from sklearn.preprocessing import LabelEncoder
+            # Ensure y is 1D
+            if len(y_array.shape) > 1:
+                y_array = np.squeeze(y_array)
+            # Use LabelEncoder to convert string labels to numeric
+            le = LabelEncoder()
+            # Fit on training split to ensure consistent encoding
+            if split == 'train':
+                y_array = le.fit_transform(y_array)
+            else:
+                # For val/test, fit on train split labels first, then transform
+                y_train = D.y['train']
+                if len(y_train.shape) > 1:
+                    y_train = np.squeeze(y_train)
+                le.fit(y_train)
+                y_array = le.transform(y_array)
+            y_array = y_array.astype(np.int64)
+    elif y_array.dtype not in [np.float32, np.float64, np.int32, np.int64]:
+        # Convert to float32 if not a standard numeric type
+        y_array = y_array.astype(np.float32)
+    
+    # Ensure y is 1D
+    if len(y_array.shape) > 1:
+        y_array = np.squeeze(y_array)
+    
+    y = torch.from_numpy(y_array).long()
     dataloader = FastTensorDataLoader(X, y, batch_size=batch_size, shuffle=(split=='train'))
     return dataloader
 
@@ -716,3 +836,131 @@ def load_dataset_info(dataset_dir_name: str) -> Dict[str, Any]:
     info['n_features'] = info['n_num_features'] + info['n_cat_features']
     info['path'] = path
     return info
+
+#############
+# TDCE: 不可变特征掩码处理功能
+
+def create_immutable_mask(
+    immutable_indices: List[int], 
+    total_features: int, 
+    device: str = 'cpu'
+) -> torch.Tensor:
+    """
+    创建不可变特征掩码
+    
+    Args:
+        immutable_indices: list[int] - 不可变特征的索引列表（在总特征中的索引）
+        total_features: int - 总特征数（连续+分类）
+        device: 设备
+    
+    Returns:
+        mask: shape (total_features,) - 二进制掩码，1表示可变，0表示不可变
+    """
+    mask = torch.ones(total_features, device=device)
+    if immutable_indices:
+        immutable_indices_tensor = torch.tensor(immutable_indices, dtype=torch.long, device=device)
+        mask[immutable_indices_tensor] = 0.0
+    return mask
+
+
+def create_immutable_mask_split(
+    immutable_indices_num: Optional[List[int]], 
+    immutable_indices_cat: Optional[List[int]], 
+    num_numerical_features: int, 
+    num_cat_features: int,
+    num_classes: Optional[List[int]] = None,
+    device: str = 'cpu'
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    创建分离的不可变特征掩码（分别用于连续和分类特征）
+    
+    Args:
+        immutable_indices_num: list[int] - 不可变连续特征索引（在连续特征中的索引）
+        immutable_indices_cat: list[int] - 不可变分类特征索引（在分类特征中的索引，不是one-hot展开后）
+        num_numerical_features: int - 连续特征数
+        num_cat_features: int - 分类特征数（原始特征数，不是one-hot展开后）
+        num_classes: list[int] - 每个分类特征的类别数（用于创建one-hot展开的掩码）
+        device: 设备
+    
+    Returns:
+        mask_num: shape (num_numerical_features,) - 连续特征掩码
+        mask_cat: shape (num_cat_features, max(num_classes)) 或 shape (num_cat_features,) - 分类特征掩码
+                  如果提供了num_classes，返回形状为(num_cat_features, max(num_classes))
+    """
+    # 连续特征掩码
+    mask_num = torch.ones(num_numerical_features, device=device)
+    if immutable_indices_num:
+        immutable_indices_num_tensor = torch.tensor(immutable_indices_num, dtype=torch.long, device=device)
+        mask_num[immutable_indices_num_tensor] = 0.0
+    
+    # 分类特征掩码
+    if num_classes is not None:
+        # 创建形状为(num_cat_features, max(num_classes))的掩码
+        max_num_classes = max(num_classes) if num_classes else 0
+        mask_cat = torch.ones(num_cat_features, max_num_classes, device=device)
+        if immutable_indices_cat:
+            immutable_indices_cat_tensor = torch.tensor(immutable_indices_cat, dtype=torch.long, device=device)
+            # 对于不可变的分类特征，将该特征的所有类别维度设为0
+            for idx in immutable_indices_cat_tensor:
+                if idx < num_cat_features:
+                    mask_cat[idx, :] = 0.0
+    else:
+        # 创建形状为(num_cat_features,)的掩码
+        mask_cat = torch.ones(num_cat_features, device=device)
+        if immutable_indices_cat:
+            immutable_indices_cat_tensor = torch.tensor(immutable_indices_cat, dtype=torch.long, device=device)
+            mask_cat[immutable_indices_cat_tensor] = 0.0
+    
+    return mask_num, mask_cat
+
+
+def apply_immutable_mask(
+    x: torch.Tensor,
+    x_original: torch.Tensor,
+    immutable_mask: torch.Tensor
+) -> torch.Tensor:
+    """
+    应用不可变特征掩码：将不可变特征恢复为原始值
+    
+    Args:
+        x: shape (batch_size, num_features) - 当前样本
+        x_original: shape (batch_size, num_features) - 原始样本
+        immutable_mask: shape (num_features,) - 掩码（1=可变，0=不可变）
+    
+    Returns:
+        x_masked: shape (batch_size, num_features) - 应用掩码后的样本
+    """
+    # 广播掩码到batch维度
+    mask_expanded = immutable_mask.unsqueeze(0)  # shape: (1, num_features)
+    
+    # 掩码为0的位置使用原始值，掩码为1的位置使用新值
+    x_masked = x * mask_expanded + x_original * (1 - mask_expanded)
+    
+    return x_masked
+
+
+def create_immutable_mask_from_feature_names(
+    immutable_feature_names: List[str],
+    feature_names: List[str],
+    device: str = 'cpu'
+) -> torch.Tensor:
+    """
+    根据特征名称创建不可变特征掩码
+    
+    Args:
+        immutable_feature_names: list[str] - 不可变特征的名称列表
+        feature_names: list[str] - 所有特征的名称列表
+        device: 设备
+    
+    Returns:
+        mask: shape (len(feature_names),) - 二进制掩码，1表示可变，0表示不可变
+    """
+    total_features = len(feature_names)
+    immutable_indices = []
+    
+    for feature_name in immutable_feature_names:
+        if feature_name in feature_names:
+            idx = feature_names.index(feature_name)
+            immutable_indices.append(idx)
+    
+    return create_immutable_mask(immutable_indices, total_features, device)

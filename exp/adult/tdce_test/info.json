@@ -1,0 +1,298 @@
+{
+    "name": "adult",
+    "task_type": "binclass",
+    "header": null,
+    "column_names": [
+        "age",
+        "workclass",
+        "education",
+        "marital.status",
+        "occupation",
+        "relationship",
+        "race",
+        "sex",
+        "capital.gain",
+        "capital.loss",
+        "hours.per.week",
+        "native.country",
+        "income"
+    ],
+    "immutable": [
+        "marital.status",
+        "sex",
+        "race"
+    ],
+    "ignore_columns": [
+        "fnlwgt",
+        "education.num"
+    ],
+    "target_col": "income",
+    "file_type": "csv",
+    "data_path": "data/adult/adult.data",
+    "test_path": "data/adult/adult.test",
+    "column_info": {
+        "0": {},
+        "type": "categorical",
+        "max": 99.0,
+        "min": 1.0,
+        "8": {},
+        "9": {},
+        "10": {},
+        "1": {},
+        "categorizes": [
+            " <=50K",
+            " >50K"
+        ],
+        "2": {},
+        "3": {},
+        "4": {},
+        "5": {},
+        "6": {},
+        "7": {},
+        "11": {},
+        "12": {}
+    },
+    "preprocess_columns": {
+        "native.country": [
+            " United-States"
+        ]
+    },
+    "train_num": 32561,
+    "test_num": 16281,
+    "target_class": " >50K",
+    "negative_class": " <=50K",
+    "column_domain": {
+        "age": [
+            17.0,
+            90.0
+        ],
+        "capital.gain": [
+            0.0,
+            99999.0
+        ],
+        "capital.loss": [
+            0.0,
+            4356.0
+        ],
+        "hours.per.week": [
+            1.0,
+            99.0
+        ],
+        "workclass": [
+            " State-gov",
+            " Self-emp-not-inc",
+            " Private",
+            " Federal-gov",
+            " Local-gov",
+            " ?",
+            " Self-emp-inc",
+            " Without-pay",
+            " Never-worked"
+        ],
+        "education": [
+            " Bachelors",
+            " HS-grad",
+            " 11th",
+            " Masters",
+            " 9th",
+            " Some-college",
+            " Assoc-acdm",
+            " Assoc-voc",
+            " 7th-8th",
+            " Doctorate",
+            " Prof-school",
+            " 5th-6th",
+            " 10th",
+            " 1st-4th",
+            " Preschool",
+            " 12th"
+        ],
+        "marital.status": [
+            " Never-married",
+            " Married-civ-spouse",
+            " Divorced",
+            " Married-spouse-absent",
+            " Separated",
+            " Married-AF-spouse",
+            " Widowed"
+        ],
+        "occupation": [
+            " Adm-clerical",
+            " Exec-managerial",
+            " Handlers-cleaners",
+            " Prof-specialty",
+            " Other-service",
+            " Sales",
+            " Craft-repair",
+            " Transport-moving",
+            " Farming-fishing",
+            " Machine-op-inspct",
+            " Tech-support",
+            " ?",
+            " Protective-serv",
+            " Armed-Forces",
+            " Priv-house-serv"
+        ],
+        "relationship": [
+            " Not-in-family",
+            " Husband",
+            " Wife",
+            " Own-child",
+            " Unmarried",
+            " Other-relative"
+        ],
+        "race": [
+            " White",
+            " Black",
+            " Asian-Pac-Islander",
+            " Amer-Indian-Eskimo",
+            " Other"
+        ],
+        "sex": [
+            " Male",
+            " Female"
+        ],
+        "native.country": [
+            " United-States",
+            "Other"
+        ]
+    },
+    "num_max": {
+        "age": "90.0",
+        "capital.gain": "99999.0",
+        "capital.loss": "4356.0",
+        "hours.per.week": "99.0"
+    },
+    "num_min": {
+        "age": "17.0",
+        "capital.gain": "0.0",
+        "capital.loss": "0.0",
+        "hours.per.week": "1.0"
+    },
+    "input_col_order": [
+        "age",
+        "capital.gain",
+        "capital.loss",
+        "hours.per.week",
+        "workclass",
+        "education",
+        "marital.status",
+        "occupation",
+        "relationship",
+        "race",
+        "sex",
+        "native.country"
+    ],
+    "idx_mapping": {
+        "0": 0,
+        "1": 4,
+        "2": 5,
+        "3": 6,
+        "4": 7,
+        "5": 8,
+        "6": 9,
+        "7": 10,
+        "8": 1,
+        "9": 2,
+        "10": 3,
+        "11": 11,
+        "12": 12
+    },
+    "inverse_idx_mapping": {
+        "0": 0,
+        "4": 1,
+        "5": 2,
+        "6": 3,
+        "7": 4,
+        "8": 5,
+        "9": 6,
+        "10": 7,
+        "1": 8,
+        "2": 9,
+        "3": 10,
+        "11": 11,
+        "12": 12
+    },
+    "idx_name_mapping": {
+        "0": "age",
+        "1": "workclass",
+        "2": "education",
+        "3": "marital.status",
+        "4": "occupation",
+        "5": "relationship",
+        "6": "race",
+        "7": "sex",
+        "8": "capital.gain",
+        "9": "capital.loss",
+        "10": "hours.per.week",
+        "11": "native.country",
+        "12": "income"
+    },
+    "num_col_idx": [
+        0,
+        8,
+        9,
+        10
+    ],
+    "cat_col_idx": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        11
+    ],
+    "target_col_idx": [
+        12
+    ],
+    "metadata": {
+        "columns": {
+            "0": {
+                "sdtype": "numerical",
+                "computer_representation": "Float"
+            },
+            "8": {
+                "sdtype": "numerical",
+                "computer_representation": "Float"
+            },
+            "9": {
+                "sdtype": "numerical",
+                "computer_representation": "Float"
+            },
+            "10": {
+                "sdtype": "numerical",
+                "computer_representation": "Float"
+            },
+            "1": {
+                "sdtype": "categorical"
+            },
+            "2": {
+                "sdtype": "categorical"
+            },
+            "3": {
+                "sdtype": "categorical"
+            },
+            "4": {
+                "sdtype": "categorical"
+            },
+            "5": {
+                "sdtype": "categorical"
+            },
+            "6": {
+                "sdtype": "categorical"
+            },
+            "7": {
+                "sdtype": "categorical"
+            },
+            "11": {
+                "sdtype": "categorical"
+            },
+            "12": {
+                "sdtype": "categorical"
+            }
+        }
+    },
+    "n_classes": 2
+}

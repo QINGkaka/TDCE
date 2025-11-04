@@ -1,11 +1,16 @@
 from sklearn.metrics import classification_report, r2_score, f1_score
 import numpy as np
 import os
+import sys
 from sklearn.utils import shuffle
 import zero
 from pathlib import Path
 import lib
-from tab_ddpm.modules import MLP
+
+# Add parent directory to path to import tdce module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tdce.modules import MLP
 from skorch.regressor import NeuralNetRegressor
 from skorch.classifier import NeuralNetClassifier
 from skorch.dataset import Dataset as SkDataset
