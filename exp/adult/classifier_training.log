@@ -1,0 +1,74 @@
+开始导入模块...
+✓ torch 导入完成
+✓ torch.nn, torch.optim 导入完成
+✓ numpy 导入完成
+✓ argparse 导入完成
+开始导入项目模块...
+✓ lib 导入完成
+✓ MLP, UNetClassifier 导入完成
+✓ make_dataset 导入完成
+✓ prepare_fast_dataloader 导入完成
+所有模块导入完成！
+脚本开始执行...
+
+=== 开始执行主函数 ===
+正在创建参数解析器...
+✓ 参数解析器创建完成
+正在解析命令行参数...
+✓ 参数解析完成: data_path=data/adult, output_path=exp/adult/classifier.pt
+正在加载配置...
+✓ 从配置文件加载参数
+  is_y_cond=True
+正在设置模型参数...
+✓ 模型参数设置完成
+正在准备数据转换配置...
+✓ 数据转换配置完成
+正在加载数据集: data/adult（这可能需要一些时间）...
+  Using is_y_cond=True (from model_params)
+✓ 数据集加载完成
+Dataset information:
+  Numerical features: 66
+  Categorical features: 0
+  Category sizes: []
+Step 1: 准备数据转换配置...
+Step 2: 加载和转换数据集（这可能需要一些时间）...
+  Using is_y_cond=True (from model_params)
+Step 3: 数据集加载完成，准备数据加载器...
+Step 4: 创建训练数据加载器...
+Step 5: 创建验证数据加载器...
+Step 6: 数据加载器创建完成
+  Using UNetClassifier (same architecture as diffusion model)
+Classifier architecture (U-Net):
+  Input dimension: 66
+  Output dimension: 2
+  Hidden layers: [256, 256]
+  Dropout: 0.1
+  Time embedding dimension: 128
+
+Starting training for 100 epochs...
+  Device: cuda:0
+  Batch size: 1024
+  Learning rate: 0.001
+  Train batches: 26 (dataset size: 26048)
+  Val batches: 7 (dataset size: 6513)
+Epoch 1/100: Train Loss=0.5536, Train Acc=72.67%, Val Loss=0.4532, Val Acc=78.43%
+  ✓ Saved best model with val_acc=78.43%, val_loss=0.4532
+Epoch 10/100: Train Loss=0.3209, Train Acc=84.67%, Val Loss=0.3288, Val Acc=84.17%
+Epoch 20/100: Train Loss=0.3142, Train Acc=85.19%, Val Loss=0.3175, Val Acc=85.18%
+  ✓ Saved best model with val_acc=85.18%, val_loss=0.3175
+Epoch 30/100: Train Loss=0.3088, Train Acc=85.86%, Val Loss=0.3141, Val Acc=85.55%
+Epoch 40/100: Train Loss=0.3007, Train Acc=86.09%, Val Loss=0.3086, Val Acc=85.66%
+Epoch 50/100: Train Loss=0.2943, Train Acc=86.35%, Val Loss=0.3080, Val Acc=85.55%
+Epoch 60/100: Train Loss=0.2975, Train Acc=86.30%, Val Loss=0.3087, Val Acc=85.89%
+Epoch 70/100: Train Loss=0.2899, Train Acc=86.43%, Val Loss=0.3065, Val Acc=85.94%
+Epoch 80/100: Train Loss=0.2905, Train Acc=86.43%, Val Loss=0.3086, Val Acc=85.94%
+Epoch 90/100: Train Loss=0.2882, Train Acc=86.69%, Val Loss=0.3096, Val Acc=85.89%
+Epoch 100/100: Train Loss=0.2877, Train Acc=86.43%, Val Loss=0.3110, Val Acc=86.00%
+
+✅ Training complete!
+   Best validation accuracy: 86.17%
+   Best validation loss: 0.3085
+   Model saved to: exp/adult/classifier.pt
+
+✅ Classifier training completed!
+脚本执行完成！

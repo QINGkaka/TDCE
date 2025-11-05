@@ -1,99 +1,128 @@
-# TabDDPM: Modelling Tabular Data with Diffusion Models
-This is the official code for our paper "TabDDPM: Modelling Tabular Data with Diffusion Models" ([paper](https://arxiv.org/abs/2209.15421))
+# TDCE: Tabular Diffusion for Counterfactual Explanations
 
-<!-- ## Results
-You can view all the results and build your own tables with this [notebook](notebooks/Reports.ipynb). -->
+This is the implementation of TDCE (Tabular Diffusion for Counterfactual Explanations), which generates counterfactual explanations for tabular data using diffusion models with classifier guidance.
 
-## Setup the environment
-1. Install [conda](https://docs.conda.io/en/latest/miniconda.html) (just to manage the env).
-2. Run the following commands
-    ```bash
-    export REPO_DIR=/path/to/the/code
-    cd $REPO_DIR
+## Overview
 
-    conda create -n tddpm python=3.9.7
-    conda activate tddpm
+TDCE is a method for generating counterfactual explanations for tabular data by:
+1. Using Gaussian diffusion for numerical features
+2. Using Gumbel-Softmax diffusion for categorical features
+3. Applying classifier gradient guidance to ensure counterfactuals flip the target label
+4. Supporting immutable features (features that cannot be changed)
 
-    pip install torch==1.10.1+cu111 -f https://download.pytorch.org/whl/torch_stable.html
-    pip install -r requirements.txt
+## Key Features
 
-    # if the following commands do not succeed, update conda
-    conda env config vars set PYTHONPATH=${PYTHONPATH}:${REPO_DIR}
-    conda env config vars set PROJECT_DIR=${REPO_DIR}
+- **Gumbel-Softmax Diffusion**: Handles categorical features with gradient-based updates
+- **Classifier Guidance**: Uses classifier gradients to guide counterfactual generation
+- **U-Net Architecture**: Uses U-Net (adapted for tabular data) as the denoising network
+- **Immutable Features**: Supports masking features that should not be changed
+- **Inverse Transformation**: Converts generated counterfactuals back to original data space
 
-    conda deactivate
-    conda activate tddpm
-    ```
+## Installation
 
-## Running the experiments
-
-Here we describe the neccesary info for reproducing the experimental results.  
-Use `agg_results.ipynb` to print results for all dataset and all methods.
-
-### Datasets
-
-We upload the datasets used in the paper with our train/val/test splits (link below). We do not impose additional restrictions to the original dataset licenses, the sources of the data are listed in the paper appendix. 
-
-You could load the datasets with the following commands:
-
-``` bash
-conda activate tddpm
-cd $PROJECT_DIR
-wget "https://www.dropbox.com/s/rpckvcs3vx7j605/data.tar?dl=0" -O data.tar
-tar -xvf data.tar
-```
-
-### File structure
-`tab-ddpm/` -- implementation of the proposed method  
-`tuned_models/` -- tuned hyperparameters of evaluation model (CatBoost or MLP)
-
-All main scripts are in `scripts/` folder:
-
-- `scripts/pipeline.py` are used to train, sample and eval TabDDPM using a given config  
-- `scripts/tune_ddpm.py` -- tune hyperparameters of TabDDPM
-- `scripts/eval_[catboost|mlp|simple].py` -- evaluate synthetic data using a tuned evaluation model or simple models
-- `scripts/eval_seeds.py` -- eval using multiple sampling and multuple eval seeds
-- `scripts/eval_seeds_simple.py` --  eval using multiple sampling and multuple eval seeds (for simple models)
-- `scripts/tune_evaluation_model.py` -- tune hyperparameters of eval model (CatBoost or MLP)
-- `scripts/resample_privacy.py` -- privacy calculation  
-
-Experiments folder (`exp/`):
-- All results and synthetic data are stored in `exp/[ds_name]/[exp_name]/` folder
-- `exp/[ds_name]/config.toml` is a base config for tuning TabDDPM
-- `exp/[ds_name]/eval_[catboost|mlp].json` stores results of evaluation (`scripts/eval_seeds.py`)  
-
-To understand the structure of `config.toml` file, read `CONFIG_DESCRIPTION.md`.
-
-Baselines:
-- `smote/`
-- `CTGAN/` -- TVAE [official repo](https://github.com/sdv-dev/CTGAN)
-- `CTAB-GAN/` --  [official repo](https://github.com/Team-TUD/CTAB-GAN)
-- `CTAB-GAN-Plus/` -- [official repo](https://github.com/Team-TUD/CTAB-GAN-Plus)
-
-### Examples
-
-<ins>Run TabDDPM tuning.</ins>   
-
-Template and example (`--eval_seeds` is optional): 
+1. Clone the repository:
 ```bash
-python scripts/tune_ddpm.py [ds_name] [train_size] synthetic [catboost|mlp] [exp_name] --eval_seeds
-python scripts/tune_ddpm.py churn2 6500 synthetic catboost ddpm_tune --eval_seeds
+git clone <repository-url>
+cd TDCE
 ```
 
-<ins>Run TabDDPM pipeline.</ins>   
-
-Template and example  (`--train`, `--sample`, `--eval` are optional): 
+2. Create and activate conda environment:
 ```bash
-python scripts/pipeline.py --config [path_to_your_config] --train --sample --eval
-python scripts/pipeline.py --config exp/churn2/ddpm_cb_best/config.toml --train --sample
+conda env create -f environment.yml  # if available
+# or
+conda activate tdce
+pip install -r requirements.txt
 ```
-It takes approximately 7min to run the script above (NVIDIA GeForce RTX 2080 Ti).  
 
-<ins>Run evaluation over seeds</ins>   
-Before running evaluation, you have to train the model with the given hyperparameters (the example above).  
+## Usage
 
-Template and example: 
+### 1. Prepare Data
+
+Prepare your dataset in the following format:
+```
+data/
+└── [dataset_name]/
+    ├── X_num_train.npy
+    ├── X_cat_train.npy
+    ├── y_train.npy
+    ├── X_num_val.npy
+    ├── X_cat_val.npy
+    ├── y_val.npy
+    ├── X_num_test.npy
+    ├── X_cat_test.npy
+    ├── y_test.npy
+    └── info.json
+```
+
+### 2. Train Diffusion Model
+
 ```bash
-python scripts/eval_seeds.py --config [path_to_your_config] [n_eval_seeds] [ddpm|smote|ctabgan|ctabgan-plus|tvae] synthetic [catboost|mlp] [n_sample_seeds]
-python scripts/eval_seeds.py --config exp/churn2/ddpm_cb_best/config.toml 10 ddpm synthetic catboost 5
+python scripts/train.py \
+    --config exp/[dataset_name]/config.toml \
+    --data_path data/[dataset_name] \
+    --parent_dir exp/[dataset_name] \
+    --device cuda:0
 ```
+
+### 3. Train Classifier
+
+```bash
+python scripts/train_classifier.py \
+    --config exp/[dataset_name]/config.toml \
+    --data_path data/[dataset_name] \
+    --output_path exp/[dataset_name]/classifier.pt \
+    --device cuda:0
+```
+
+### 4. Generate Counterfactuals
+
+```bash
+python scripts/sample_counterfactual.py \
+    --config exp/[dataset_name]/config.toml \
+    --original_data exp/[dataset_name]/original_samples.npy \
+    --classifier_path exp/[dataset_name]/classifier.pt \
+    --output exp/[dataset_name]/counterfactuals.npy \
+    --target_y 1 \
+    --lambda_guidance 1.0 \
+    --device cuda:0
+```
+
+### 5. Evaluate Counterfactuals
+
+```bash
+python scripts/evaluate_counterfactuals.py \
+    --original_samples exp/[dataset_name]/original_samples.npy \
+    --counterfactual_samples exp/[dataset_name]/counterfactuals.npy \
+    --classifier_path exp/[dataset_name]/classifier.pt \
+    --config exp/[dataset_name]/config.toml \
+    --data_path data/[dataset_name] \
+    --target_y 1 \
+    --device cuda:0 \
+    --output exp/[dataset_name]/evaluation_results.txt
+```
+
+## Configuration
+
+The configuration file (`config.toml`) includes:
+- Model parameters (U-Net architecture, hidden dimensions, etc.)
+- Training parameters (learning rate, batch size, epochs)
+- Diffusion parameters (number of timesteps, noise schedule)
+- Gumbel-Softmax parameters (temperature, annealing schedule)
+
+See `CONFIG_DESCRIPTION.md` for detailed configuration options.
+
+## Architecture
+
+- **Denoising Network**: U-Net (adapted for tabular data with fully connected layers)
+- **Classifier**: U-Net (same architecture as denoising network)
+- **Numerical Features**: Gaussian diffusion
+- **Categorical Features**: Gumbel-Softmax diffusion
+
+## References
+
+- TDCE Paper: [Paper Title/URL]
+- Related Work: This implementation uses diffusion models for tabular data generation
+
+## License
+
+See LICENSE.md for details.

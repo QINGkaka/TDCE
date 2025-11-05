@@ -1,5 +1,5 @@
 """
-Have not used in TabDDPM project.
+Have not used in TDCE project.
 """
 
 import datetime
@@ -8,7 +8,7 @@ import shutil
 import typing as ty
 from pathlib import Path
 
-PROJ = Path('tab-ddpm/').absolute().resolve()
+PROJ = Path('tdce/').absolute().resolve()
 EXP = PROJ / 'exp'
 DATA = PROJ / 'data'
 

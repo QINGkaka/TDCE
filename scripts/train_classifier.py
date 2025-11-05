@@ -23,8 +23,8 @@ print("✓ argparse 导入完成", flush=True)
 print("开始导入项目模块...", flush=True)
 import lib
 print("✓ lib 导入完成", flush=True)
-from tdce.modules import MLP
-print("✓ MLP 导入完成", flush=True)
+from tdce.modules import MLP, UNetClassifier
+print("✓ MLP, UNetClassifier 导入完成", flush=True)
 from scripts.utils_train import make_dataset
 print("✓ make_dataset 导入完成", flush=True)
 from lib.data import prepare_fast_dataloader
@@ -120,19 +120,46 @@ def train_classifier(
         'dropout': 0.1
     })
     
-    classifier = MLP.make_baseline(
-        d_in=d_in,
-        d_out=d_out,
-        d_layers=classifier_params.get('d_layers', [256, 256]),
-        dropout=classifier_params.get('dropout', 0.1)
-    )
-    classifier.to(device)
+    # 检查是否使用U-Net架构（从model_params中获取）
+    use_unet = model_params.get('use_unet_classifier', False)
+    classifier_model_type = model_params.get('classifier_model_type', 'mlp')  # 'mlp' or 'unet'
     
-    print(f"Classifier architecture:")
-    print(f"  Input dimension: {d_in}")
-    print(f"  Output dimension: {d_out}")
-    print(f"  Hidden layers: {classifier_params.get('d_layers', [256, 256])}")
-    print(f"  Dropout: {classifier_params.get('dropout', 0.1)}")
+    if classifier_model_type == 'unet' or use_unet:
+        # 使用U-Net架构的分类器（与去噪网络相同架构）
+        print("  Using UNetClassifier (same architecture as diffusion model)")
+        classifier = UNetClassifier(
+            d_in=d_in,
+            num_classes=model_params.get('num_classes', 0),
+            is_y_cond=is_y_cond,
+            rtdl_params={
+                'd_layers': classifier_params.get('d_layers', [256, 256]),
+                'dropout': classifier_params.get('dropout', 0.1)
+            },
+            dim_t=model_params.get('dim_t', 128),
+            num_output_classes=d_out
+        )
+        classifier.to(device)
+        print(f"Classifier architecture (U-Net):")
+        print(f"  Input dimension: {d_in}")
+        print(f"  Output dimension: {d_out}")
+        print(f"  Hidden layers: {classifier_params.get('d_layers', [256, 256])}")
+        print(f"  Dropout: {classifier_params.get('dropout', 0.1)}")
+        print(f"  Time embedding dimension: {model_params.get('dim_t', 128)}")
+    else:
+        # 使用MLP架构的分类器（默认）
+        print("  Using MLP classifier")
+        classifier = MLP.make_baseline(
+            d_in=d_in,
+            d_out=d_out,
+            d_layers=classifier_params.get('d_layers', [256, 256]),
+            dropout=classifier_params.get('dropout', 0.1)
+        )
+        classifier.to(device)
+        print(f"Classifier architecture (MLP):")
+        print(f"  Input dimension: {d_in}")
+        print(f"  Output dimension: {d_out}")
+        print(f"  Hidden layers: {classifier_params.get('d_layers', [256, 256])}")
+        print(f"  Dropout: {classifier_params.get('dropout', 0.1)}")
     
     # 4. 训练
     criterion = nn.CrossEntropyLoss()
@@ -169,7 +196,11 @@ def train_classifier(
             y = y.to(device)
             
             optimizer.zero_grad()
-            logits = classifier(x)
+            # UNetClassifier需要timesteps参数（虽然不使用），为了兼容性传入None
+            if isinstance(classifier, UNetClassifier):
+                logits = classifier(x, timesteps=None)
+            else:
+                logits = classifier(x)
             loss = criterion(logits, y)
             loss.backward()
             
@@ -202,7 +233,11 @@ def train_classifier(
                 x = x.to(device)
                 y = y.to(device)
                 
-                logits = classifier(x)
+                # UNetClassifier需要timesteps参数（虽然不使用），为了兼容性传入None
+                if isinstance(classifier, UNetClassifier):
+                    logits = classifier(x, timesteps=None)
+                else:
+                    logits = classifier(x)
                 loss = criterion(logits, y)
                 
                 val_loss += loss.item()

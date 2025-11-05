@@ -64,22 +64,22 @@ TDCE/data/{dataset_name}/
 ├── X_num_test.npy       # 数值特征测试集
 ├── X_cat_test.npy       # 分类特征测试集
 ├── y_test.npy           # 标签测试集
-└── info.json            # 数据集元信息（包含n_classes字段，已适配TabDDPM）
+└── info.json            # 数据集元信息（包含n_classes字段）
 ```
 
 ## 四、输出格式说明
 
 ### 文件格式
-- **数据文件**：`.npy`格式（NumPy数组），与TabDDPM完全兼容
-- **元信息**：`info.json`包含以下TabDDPM必需字段：
+- **数据文件**：`.npy`格式（NumPy数组），标准表格数据格式
+- **元信息**：`info.json`包含以下必需字段：
   - `task_type`: "binclass" / "multiclass" / "regression"
   - `n_classes`: 类别数量（已自动计算）
   - `train_num`: 训练集样本数
   - `test_num`: 测试集样本数
   - 其他字段：特征信息、不可变特征列表等
 
-### TabDDPM兼容性
-✅ 完全兼容TabDDPM的数据加载接口：
+### 数据兼容性
+✅ 完全兼容表格数据的数据加载接口：
 ```python
 from lib.data import Dataset
 dataset = Dataset.from_dir('data/adult')  # 可以直接加载
@@ -137,11 +137,11 @@ with open(dataset_path / 'info.json') as f:
     print(f"Test samples: {info['test_num']}")
 ```
 
-### 使用TabDDPM加载验证
+### 使用数据加载验证
 ```python
 from lib.data import Dataset
 
-# 验证TabDDPM可以正确加载
+# 验证TDCE可以正确加载
 dataset = Dataset.from_dir('data/adult')
 print(f"Features: {dataset.n_num_features} numerical, {dataset.n_cat_features} categorical")
 print(f"Task type: {dataset.task_type}")
@@ -160,7 +160,7 @@ print(f"Classes: {dataset.n_classes}")
 
 ### 3. 验证集处理
 - 脚本只生成train和test集
-- TabDDPM会在需要时从train集中分离出val集（使用`lib.change_val()`函数）
+- TDCE会在需要时从train集中分离出val集（使用`lib.change_val()`函数）
 
 ### 4. 不可变特征
 - TABCF的配置文件（`data/Info/*.json`）已包含`immutable`字段

@@ -1,0 +1,6 @@
+TDCE Counterfactual Evaluation Results
+==================================================
+L2_distance: 3768.624228
+Diversity: 2003.324989
+Instability: 1855.322486
+Validity: 0.350000

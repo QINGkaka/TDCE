@@ -39,21 +39,45 @@ def load_classifier(
     Returns:
         classifier: 分类器模型
     """
-    from tdce.modules import MLP
+    from tdce.modules import MLP, UNetClassifier
     
-    # 构建分类器（使用MLP）
+    # 确定分类器架构类型
+    classifier_model_type = model_params.get('classifier_model_type', 'mlp')  # 'mlp' or 'unet'
+    is_y_cond = model_params.get('is_y_cond', False)
+    
+    # 构建分类器输入维度
     d_in = num_numerical_features + sum(num_classes)
+    d_out = model_params.get('num_classes', 2)  # 分类任务的类别数
+    
     classifier_params = model_params.get('classifier_params', {
         'd_layers': [256, 256],
         'dropout': 0.1
     })
     
-    classifier = MLP.make_baseline(
-        d_in=d_in,
-        d_out=model_params.get('num_classes', 2),  # 分类任务的类别数
-        d_layers=classifier_params.get('d_layers', [256, 256]),
-        dropout=classifier_params.get('dropout', 0.1)
-    )
+    # 根据配置选择架构
+    if classifier_model_type == 'unet':
+        # 使用U-Net架构的分类器（与去噪网络相同架构）
+        print(f"  Loading UNetClassifier (same architecture as diffusion model)")
+        classifier = UNetClassifier(
+            d_in=d_in,
+            num_classes=model_params.get('num_classes', 0),
+            is_y_cond=is_y_cond,
+            rtdl_params={
+                'd_layers': classifier_params.get('d_layers', [256, 256]),
+                'dropout': classifier_params.get('dropout', 0.1)
+            },
+            dim_t=model_params.get('dim_t', 128),
+            num_output_classes=d_out
+        )
+    else:
+        # 使用MLP架构的分类器（默认）
+        print(f"  Loading MLP classifier")
+        classifier = MLP.make_baseline(
+            d_in=d_in,
+            d_out=d_out,
+            d_layers=classifier_params.get('d_layers', [256, 256]),
+            dropout=classifier_params.get('dropout', 0.1)
+        )
     
     # 加载模型权重
     if os.path.exists(classifier_path):
@@ -91,6 +115,10 @@ def sample_counterfactual(
     """
     生成反事实样本的主函数
     
+    **论文要求**：每个测试样本生成1个反事实样本（一对一映射）
+    - 输入N个原始样本，输出N个反事实样本
+    - 每个数据集的测试集固定为1,000条，因此生成1,000个反事实样本
+    
     Args:
         config_path: 配置文件路径
         original_data_path: 原始样本文件路径（numpy数组）
@@ -120,6 +148,19 @@ def sample_counterfactual(
         is_y_cond=config['model_params']['is_y_cond'],
         change_val=False
     )
+    
+    # 预加载训练数据范围，用于截断
+    from lib.data import read_pure_data
+    try:
+        X_num_train, _, _ = read_pure_data(config['real_data_path'], 'train')
+        train_num_ranges = {
+            'min': X_num_train.min(axis=0),
+            'max': X_num_train.max(axis=0)
+        }
+        print(f"Loaded training data ranges for clipping: shape={X_num_train.shape}")
+    except Exception as e:
+        print(f"Warning: Could not load training data ranges: {e}")
+        train_num_ranges = None
     
     # 3. 加载原始样本
     if original_data_path.endswith('.npy'):
@@ -183,9 +224,12 @@ def sample_counterfactual(
     print(f"  num_numerical_features: {num_numerical_features}")
     print(f"  category_sizes (K): {list(K)}")
     
+    # 移除分类器专用参数（这些参数不应该传递给扩散模型）
+    model_params_clean = {k: v for k, v in config['model_params'].items() if k != 'classifier_model_type'}
+    
     model = get_model(
         config['model_type'],
-        config['model_params'],
+        model_params_clean,
         num_numerical_features,
         category_sizes=dataset.get_category_sizes('train')
     )
@@ -206,8 +250,7 @@ def sample_counterfactual(
         gaussian_loss_type=config['diffusion_params'].get('gaussian_loss_type', 'mse'),
         scheduler=config['diffusion_params'].get('scheduler', 'cosine'),
         device=device,
-        # TDCE参数
-        use_gumbel_softmax=True,
+        # TDCE参数（TDCE始终使用Gumbel-Softmax）
         tau_init=config.get('tau_init', 1.0),
         tau_final=config.get('tau_final', 0.3),
         tau_schedule=config.get('tau_schedule', 'anneal')
@@ -292,14 +335,19 @@ def sample_counterfactual(
         pass
     
     # 8. 生成反事实样本
+    # 论文要求：每个原始样本生成1个反事实样本（一对一映射）
     counterfactuals = []
     print(f"Generating counterfactuals for target_y={target_y}...")
+    print(f"  Total original samples: {len(original_samples)}")
+    print(f"  Expected counterfactual samples: {len(original_samples)} (1 counterfactual per original sample)")
     
     for i in range(0, len(original_samples), batch_size):
         batch_original = original_samples[i:i+batch_size]
         batch_size_actual = batch_original.shape[0]
         
-        print(f"Processing batch {i//batch_size + 1}/{(len(original_samples) + batch_size - 1)//batch_size}")
+        batch_num = i//batch_size + 1
+        total_batches = (len(original_samples) + batch_size - 1)//batch_size
+        print(f"Processing batch {batch_num}/{total_batches}")
         
         # 创建batch级别的掩码
         batch_immutable_mask = None
@@ -307,6 +355,8 @@ def sample_counterfactual(
             batch_immutable_mask = immutable_mask.unsqueeze(0).expand(batch_size_actual, -1)
         
         # 调用sample_counterfactual生成反事实样本
+        import time
+        batch_start_time = time.time()
         batch_cf = diffusion.sample_counterfactual(
             x_original=batch_original,
             y_original=y_original,  # 如果可用
@@ -317,10 +367,17 @@ def sample_counterfactual(
             num_steps=None,  # 使用全部时间步
             start_from_noise=start_from_noise
         )
+        batch_time = time.time() - batch_start_time
+        print(f"  Batch {batch_num} completed in {batch_time:.1f}s", flush=True)
         
         counterfactuals.append(batch_cf.cpu().numpy())
     
     counterfactuals = np.concatenate(counterfactuals, axis=0)
+    
+    # 调试：检查反归一化前的数据
+    print(f"Counterfactuals before inverse transform: shape={counterfactuals.shape}, dtype={counterfactuals.dtype}")
+    print(f"Counterfactuals min/max (first 4 cols): {counterfactuals[:, :4].min():.6f} / {counterfactuals[:, :4].max():.6f}")
+    print(f"Counterfactuals mean/std (first 4 cols): {counterfactuals[:, :4].mean():.6f} / {counterfactuals[:, :4].std():.6f}")
     
     # 9. 反归一化：将反事实样本转换回原始数据空间
     print("Inverse transforming counterfactuals to original data space...")
@@ -394,7 +451,24 @@ def sample_counterfactual(
                 
                 # 反归一化数值部分
                 if num_features_original > 0:
+                    # 调试：检查反归一化前的数值特征
+                    print(f"  Debug: cf_num_only shape: {cf_num_only.shape}, min/max: {cf_num_only.min():.6f} / {cf_num_only.max():.6f}")
                     cf_num_inv = dataset.num_transform.inverse_transform(cf_num_only)
+                    # 调试：检查反归一化后的数值特征
+                    print(f"  Debug: cf_num_inv shape: {cf_num_inv.shape}, min/max: {cf_num_inv.min():.6f} / {cf_num_inv.max():.6f}")
+                    
+                    # 截断到训练数据的实际范围（处理稀疏特征和大标准差导致的异常值）
+                    if train_num_ranges is not None and cf_num_inv.shape[1] <= len(train_num_ranges['min']):
+                        for i in range(cf_num_inv.shape[1]):
+                            min_val = float(train_num_ranges['min'][i])
+                            max_val = float(train_num_ranges['max'][i])
+                            before_min = (cf_num_inv[:, i] < min_val).sum()
+                            before_max = (cf_num_inv[:, i] > max_val).sum()
+                            if before_min > 0 or before_max > 0:
+                                print(f"  Clipping feature {i}: {before_min} values < {min_val:.2f}, {before_max} values > {max_val:.2f}")
+                                cf_num_inv[:, i] = np.clip(cf_num_inv[:, i], min_val, max_val)
+                    else:
+                        print(f"  Warning: Could not clip numerical features (ranges not available)")
                 else:
                     cf_num_inv = cf_num_only
                 
@@ -423,12 +497,46 @@ def sample_counterfactual(
                     cf_target = counterfactuals_num[:, 0:1]
                     cf_num_only = counterfactuals_num[:, 1:]
                     cf_num_inv = dataset.num_transform.inverse_transform(cf_num_only)
+                    
+                    # 截断到训练数据的实际范围
+                    if train_num_ranges is not None and cf_num_inv.shape[1] <= len(train_num_ranges['min']):
+                        for i in range(cf_num_inv.shape[1]):
+                            min_val = float(train_num_ranges['min'][i])
+                            max_val = float(train_num_ranges['max'][i])
+                            before_min = (cf_num_inv[:, i] < min_val).sum()
+                            before_max = (cf_num_inv[:, i] > max_val).sum()
+                            if before_min > 0 or before_max > 0:
+                                print(f"  Clipping feature {i}: {before_min} values < {min_val:.2f}, {before_max} values > {max_val:.2f}")
+                                cf_num_inv[:, i] = np.clip(cf_num_inv[:, i], min_val, max_val)
+                    
                     counterfactuals_inv = np.hstack([cf_target, cf_num_inv])
                 else:
                     counterfactuals_inv = dataset.num_transform.inverse_transform(counterfactuals_num)
+                    
+                    # 截断到训练数据的实际范围
+                    if train_num_ranges is not None and counterfactuals_inv.shape[1] <= len(train_num_ranges['min']):
+                        for i in range(counterfactuals_inv.shape[1]):
+                            min_val = float(train_num_ranges['min'][i])
+                            max_val = float(train_num_ranges['max'][i])
+                            before_min = (counterfactuals_inv[:, i] < min_val).sum()
+                            before_max = (counterfactuals_inv[:, i] > max_val).sum()
+                            if before_min > 0 or before_max > 0:
+                                print(f"  Clipping feature {i}: {before_min} values < {min_val:.2f}, {before_max} values > {max_val:.2f}")
+                                counterfactuals_inv[:, i] = np.clip(counterfactuals_inv[:, i], min_val, max_val)
         else:
             # 没有使用one-hot编码，直接反归一化
             counterfactuals_inv = dataset.num_transform.inverse_transform(counterfactuals_num)
+            
+            # 截断到训练数据的实际范围
+            if train_num_ranges is not None and counterfactuals_inv.shape[1] <= len(train_num_ranges['min']):
+                for i in range(counterfactuals_inv.shape[1]):
+                    min_val = float(train_num_ranges['min'][i])
+                    max_val = float(train_num_ranges['max'][i])
+                    before_min = (counterfactuals_inv[:, i] < min_val).sum()
+                    before_max = (counterfactuals_inv[:, i] > max_val).sum()
+                    if before_min > 0 or before_max > 0:
+                        print(f"  Clipping feature {i}: {before_min} values < {min_val:.2f}, {before_max} values > {max_val:.2f}")
+                        counterfactuals_inv[:, i] = np.clip(counterfactuals_inv[:, i], min_val, max_val)
             
             # 反归一化分类特征
             if dataset.cat_transform is not None and counterfactuals_cat is not None:

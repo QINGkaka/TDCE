@@ -1,0 +1,1413 @@
+
+--- Page 1 ---
+Highlights
+Tabular Diffusion Counterfactual Explanations
+Wei Zhang, Brian Barr, John Paisley
+• We propose a novel counterfactual generation algorithm for tabular
+datasets using Gumbel-softmax re-parameterization in controllable dif-
+fusion models. Our method permits gradient backpropagation, which
+resembles the classifier guidance in the Gaussian case.
+• We introduce an approximation to the Gumbel-softmax distribution
+and derive a tight bound. We also study the effect of temperature τ in
+the Gumbel-softmax distribution.
+• We experiment with our method on four large-scale tabular datasets.
+The results demonstrate that our method can achieve competitive
+performance using widely-adopted metrics for counterfactual generation.
+5202
+guA
+13
+]GL.sc[
+1v67800.9052:viXra
+
+--- Page 2 ---
+Tabular Diffusion Counterfactual Explanations
+Wei Zhang, Brian Barr, John Paisley
+aElectrical Engineering, Columbia University, 116th and Broadway, New
+York, 10025, NY, U.S.A.
+bCapital One, 1680 Capital One Dr, Mc Lean, 22102, VA, U.S.A.
+cElectrical Engineering, Columbia University, 116th and Broadway, New
+York, 10025, NY, U.S.A.
+Abstract
+Counterfactual explanations methods provide an important tool in the field
+of interpretable machine learning. Recent advances in this direction have
+focused on diffusion models to explain a deep classifier. However, these
+techniques have predominantly focused on problems in computer vision. In
+this paper, we focus on tabular data typical in finance and the social sciences
+and propose a novel guided reverse process for categorical features based
+on an approximation to the Gumbel-softmax distribution. Furthermore, we
+study the effect of the temperature τ and derive a theoretical bound between
+the Gumbel-softmax distribution and our proposed approximated distribution.
+Weperform experiments onseverallarge-scale credit lendingand othertabular
+datasets, assessing their performance in terms of the quantitative measures
+of interpretability, diversity, instability, and validity. These results indicate
+that our approach outperforms popular baseline methods, producing robust
+and realistic counterfactual explanations.
+Keywords: Counterfactual Generation, Controllable Diffusion Models,
+Explainable Machine Learning
+Preprint submitted to Information Sciences September 3, 2025
+
+--- Page 3 ---
+1. Introduction
+Deep neural networks have revolutionized many fields, perhaps most
+notably in computer vision and natural language processing. Despite its
+extraordinary performance, the frequent lack of a deep model’s explainability
+prevents it from being widely adopted in regulated fields such as Fintech.
+Practitioners in those fields are interested in not only the decisions given
+by the black-box model, but also the reasons behind the decisions. This
+is necessary for transparency of the factors impacting the decision, and
+explaining alternatives that may produce different outcomes.
+Many methods have been developed to improve transparency of back-
+box models. A number of works generate feature importance based on local
+approximations [1], global approximations [2], gradients attributions [3, 4] and
+SHAP values [5]. Other methods focus on interventions in causal regimes [6, 7]
+and the construction of additive models using neural networks [8, 9, 10, 11].
+In this paper, we focus on tabular counterfactual explanations (CEs), a
+post-hoc method that answers the question “What changes can be made to
+an input so that its output label changes to the target class?” CEs aim to
+explain a classifier f : Rd → {0,1} by generating a counterfactual sample xˆ
+such that the predicted label is flipped with minimal changes to the input ad
+defined by a metric d(·,·). This can be characteristically formulated as
+argmind(x,xˆ) subject to f(x) = y . (1)
+(cid:98) target
+x
+(cid:98)
+Wachter et al. [12] cast this framework into an optimization problem and
+directly back-propagate the gradients of the classifier and distance constraints
+into the feature space. This approach treats each feature as a continuous
+2
+
+--- Page 4 ---
+variable and thus does not directly apply to categorical features. Other meth-
+ods explicitly deal with categorical features and generate the counterfactual
+explanations using graphs [13], prototypes [14], multi-objective functions [15],
+rule-based sets [16], point processes [17] and random forests [18].
+Deep generative models such as VAEs [19] also play a key role because
+of their high-fidelity generative power. Joshi et al. [20] and Antor´an et al.
+[21] propose methods that search in the latent space of a VAE to generate
+counterfactuals. Pawelczyk et al. [22] focus explicitly on tabular data and use
+conditional VAEs as the generator for a target class. Methods in this line of
+work build on VAE architectures and rely on an efficient searching algorithm.
+Instead, like Wachter et al. [12] we work directly in the feature space, but
+approach the problem from the perspective of diffusion modeling [23, 24].
+In the continuous image domain Dhariwal and Nichol [25] have introduced
+classifier guidance on the reverse process for continuous features such as
+image data, while Augustin et al. [26] built upon this framework with a
+counterfactual constraint on the reverse process. The proposed methods
+generate high-fidelity counterfactual images for a vision classifier. Explainable
+diffusion models for categorical tabular data have received less consideration.
+While diffusion models have been extensively studied for categorical tabular
+data, e.g., [27, 28, 29, 30, 31], this line of work rarely intends to provide
+explanations for a classifier.
+Two notable recent investigations in this area include [32, 33]. Gruver
+et al. [32] focus on controllable discrete diffusion models in protein design
+by introducing a learnable mapping function that projects a discrete vector
+onto a continuous representation. The resulting representation is treated
+3
+
+--- Page 5 ---
+as a continuous variable and is diffused through the Gaussian distribution.
+Schiff et al. [33] also focuses on discrete data by treating a one-hot vector as
+continuous.
+We propose a novel tabular diffusion model for counterfactual explanations
+that leverages Gumbel-softmax re-parameterization [34]. Our contributions
+are three-fold:
+1. Our method permits gradient backpropagation, and the resulting reverse
+process resembles the classifier guidance in the Gaussian case. It is easy
+to implement and efficient for counterfactual generation.
+2. We study the effect of temperature τ in the Gumbel-softmax distribution
+on our model and derive a tight bound between an introduced approxima-
+tion. Our proposed method approximates the base model better as the
+temperature decreases.
+3. We experiment on four large-scale tabular datasets. The results demon-
+strate that our method achieves competitive performance on popular
+metrics used to evaluate counterfactuals within the field.
+2. Related Works
+To situate our method within technological developments, we first review
+machine learning works related to counterfactual explanations and recent ad-
+vancesincontrollablediffusionmodels, highlightingsomeofthekeydifferences
+and shortcomings our method seeks to address for tabular data.
+4
+
+--- Page 6 ---
+2.1. Counterfactual Explanations
+Following Equation 1, researchers have leveraged the auto-encoder ar-
+chitecture to construct a counterfactual explainer. Joshi et al. [20] takes a
+learned auto-encoder and aims to find the latent vector of the counterfactual
+sample by back-propagating gradients from the classifier into the latent space.
+The distance constraint is applied in the feature space. Antor´an et al. [21]
+takes a similar approach but uses Bayesian Neural Networks to estimate
+the uncertainty of the generated counterfactual. Pawelczyk et al. [22] also
+works in the latent space but explicitly tackles a set of immutable features.
+The authors use the conditional HVAE [35] and condition on the immutable
+features while the searching of the counterfactual is again completed in the
+latent space with validity and minimum changes constraints in the feature
+space. These methods work in the latent space, and once the latent vector is
+found, the counterfactual sample is generated from the pretrained decoder.
+To mitigate the searching task, Guo et al. [36, 37], Zhang et al. [38] train
+the classifier and counterfactual generator simultaneously by supervising
+the latent space. The counterfactual samples can be generated by linear
+mapping[38] and non-linear mapping [36, 37] in the latent space, which
+effectively reduces the computational cost. Though efficient, such explainers
+are model-dependent, and the uncertainty of the decoder still exists. In
+contrast, our approach will be model-agnostic and directly operates in the
+feature space.
+On the other hand, Wachter et al. [12] directly works in the feature space.
+The proposed method back-propagates the gradients that lead to the target
+class label with minimum changes in the feature space. Through this back-
+5
+
+--- Page 7 ---
+propagation, it becomes easier to handle immutable features, which simply
+mask the corresponding gradients. Though effective, it is still hard to handle
+categorical features in this setting. In addition, it has been shown that a
+single pixel can fool a well-trained classifier [39]. Thus, although the resulting
+counterfactual sample might be valid (i.e. changed its label), it may not
+provide meaningful human-actionable information, or insight into the learned
+deep neural network.
+Another method called FACE [13] also works in the feature space. Here,
+a graph is first constructed based on the existing dataset. A graph search
+algorithm is then performed until it finds the counterfactual sample with the
+target label and minimum changes. If immutable features are present, a sub-
+graph is selected from the original graph. Though intuitive, the counterfactual
+samples are only selected from the existing dataset, which limits the diversity
+of the generated samples. Depending on the size of the dataset, the proposed
+method might also suffer from an instability issue. The computational cost is
+also high for this method.
+2.2. Guided Diffusion Models
+Diffusion models have demonstrated much generative power for image
+generation [24, 23] and tabular data generation [30]. However, counterfactual
+explanations through diffusion models are still rapidly developing. Guided
+diffusion models have been extensively studied [25] and extended [26] in this
+direction. In this paper, we employ these developments for tabular data,
+but challenges remain for extending to categorical features. Guided diffusion
+works because they operate in continuous spaces, where gradients can be
+calculated. However, this is infeasible in discrete spaces.
+6
+
+--- Page 8 ---
+Recently, Gruver et al. [32] have developed a controllable diffusion pipeline
+for protein generation, which is purely categorical data, using a continuous
+function mapping. Schiff et al. [33] also worked on categorical language
+data, by directly treating the categorical vector as if it were a continuous
+vector. Both of these recent works have demonstrated their efficacy for their
+related tasks. While in this line of work, our paper is distinct in two ways:
+1) We propose a new approach to handling categorical data in controllable
+diffusion models that requires minimal modification to the existing tabular
+diffusion frameworks, and 2) We handle both continuous and categorical data
+simultaneously with the aim of explainable classification, whereas these two
+papers do not involve a classification problem.
+3. Background on Diffusion Models
+3.1. Tabular diffusion models
+Diffusion models have been extensively studied recently as a powerful
+generative model for high fidelity images [40, 23, 41, 24]. A typical diffusion
+model consists of a forward and reverse Markov process. The forward process
+injects Gaussian noise to the input along a sequence of time step, termi-
+nating at a prior, typically isotropic Gaussian distribution. The Markovian
+assumption factorizes the forward process as q(x |x ) =
+(cid:81)T
+q(x |x ).
+1:T 0 t=1 t t−1
+The reverse process aims to gradually denoise from the prior x ∼ q(x )
+T T
+to generate a new sample through p(x ) =
+(cid:81)T
+p(x |x ). Although the
+0:T t=1 t−1 t
+Gaussian forward process can be derived in closed form, the reverse process
+p(x |x ) is intractable and requires a neural network to approximate. The
+t−1 t
+parameters of the denoising neural network can be learned by maximizing
+7
+
+--- Page 9 ---
+the evidence lower bound,
+(cid:104)
+logq(x ) ≥ E logq(x |x )−KL(q(x |x )∥q(x ))
+0 q(x0) 0 1 T 0 T
+(cid:124) (cid:123)(cid:122) (cid:125) (cid:124) (cid:123)(cid:122) (cid:125)
+L0 LT
+T
+(cid:88) (cid:105)
+− KL(q(x |x ,x )∥q(x |x )) . (2)
+t−1 t 0 t−1 t
+(cid:124) (cid:123)(cid:122) (cid:125)
+t=2
+Lt
+The key distinction of tabular diffusion models is that there are two inde-
+pendent processes: Gaussian diffusion models for continuous features and
+Multinomial diffusion models for categorical features [30].
+Continuous diffusions.. Let x ∈ RD and α = 1−β where t ∈ [1,T] is the
+t t t
+time step. The forward process follows the distribution
+√
+q(x ) ∼ N(x | α x ,(1−β I)). (3)
+t t t t−1 t
+√ √
+Givenx ,themarginaldistributionofx foranytisq(x |x ) ∼ N(x | α x , 1−α I)
+0 t t 0 t t 0 t
+where α =
+(cid:81)t
+α . This allows direct generation of the noisy x . The reverse
+t i=1 i t
+process approximates the true posterior q(x |x ,x ) with q (x |x ). By
+t−1 t 0 θ t−1 t
+Bayes’ rule, q(x |x ,x ) can be computed in closed form and is Gaussian.
+t−1 t 0
+Therefore, q (x |x ) is usually chosen to be a neural network-parameterized
+θ t−1 t
+Gaussian, q (x |x ) ∼ N(x |µ (x ,t),Σ (x ,t)). Alternatively, Ho et al.
+θ t−1 t t−1 θ t θ t
+[23] found that, instead of directly producing the mean of the posterior Gaus-
+sian distribution, more favorable results can be found by predicting the noise
+at each time step:
+L = E ∥ϵ −ϵ (x ,t))∥2 (4)
+t ϵ∼N(0,I) t θ t
+where ϵ is a neural network. Once trained, the mean of the posterior can be
+θ
+derived as
+(cid:18) (cid:19)
+1 β
+µ (x ,t) = √ x − √ t ϵ (x ,t) , (5)
+θ t t θ t
+1−β 1−α
+t t
+8
+
+--- Page 10 ---
+which gradually denoises x . Furthermore, Ho et al. [23] construct the genera-
+t
+tive process using stochastic Langevin dynamics which introduce randomness
+during the sampling process. We use the same dynamics, except for the final
+step which produces actual samples.
+Categorical diffusions.. Multinomial diffusion models adapt the framework to
+handle categorical data [27]. Let x be a K-dimensional one-hot vector. The
+t
+forward process now becomes
+(cid:0) (cid:1)
+q(x |x ) ∼ Cat x |(1−β )x +β /K . (6)
+t t−1 t t t−1 t
+When T is large enough, the resulting x ∼ Cat(x |1/K). Similar to the
+T T
+continuous case, x can be computed as q(x |x ) = Cat(x |α x +(1−α )/K).
+t t 0 t t 0 t
+The posterior of the reverse process can be derived using Bayes’ rule,
+(cid:16) (cid:17)
+q(x |x ,x ) ∼ Cat x |π/
+(cid:80)K
+π , (7)
+t−1 t 0 t−1 i=1 i
+where π = [α x +(1−α )/K]⊙[α x +(1−α )/K]. The loss L in the
+t t t t−1 0 t−1 t
+categorical case is the KL divergence KL(q(x |x ,x )∥p (x |x )) where
+t−1 t 0 θ t−1 t
+the neural network outputs the predicted x directly from the noisy input x .
+(cid:101)0 t
+3.2. Classifier guidance
+Controllablereverseprocesseshavebeenexploredtogenerateclass-dependent
+samples [41]. In classifier-free guidance, the target class label y is embedded
+into the denoising neural network, generating class-dependent predicted noise.
+No classifier exists to be explained or generate counterfactuals for, and so
+these techniques are outside the scope of this paper.
+9
+
+--- Page 11 ---
+In classifier guidance methods, a differentiable classifier p (y|x) is trained
+ϕ
+on the input space and a guided reverse process is formulated as
+p (x |x ,y) = 1p (x |x )p (y|f (x )), (8)
+θ,ϕ t t+1 Z θ t t+1 ϕ dn t
+where f reconstructs the noise-free sample. A first-order Taylor expansion
+dn
+around the mean µ gives the approximation
+1p (x |x )p (y|x ) ∼ N(µ+Σg,Σ), (9)
+Z θ t t+1 ϕ t
+where g = ∇ logp (y|f (x ))| . We see that the reverse process uses
+xt ϕ dn t xt=µ
+gradient information from the target class in the generative process.
+However, in the categorical setting a combinatorial challenge arises when
+(cid:81)
+calculating gradients, resulting in O( K ) forward passes from the classifier,
+i i
+where K is the number of options for i-th categorical variable. This is
+i
+infeasible when the number of categorical variables becomes large. This
+challenge motivates our following use of Gumbel-softmax reparameterization,
+resulting in a reverse process similar to that of the continuous case.
+4. Categorical Tabular Diffusions for Counterfactual Explanations
+We propose a novel method to generate counterfactual explanations for
+any differentiable classifier, with particular interest in the categorical data
+scenario. We adopt the Gumbel-softmax re-parameterization [34] transform
+to provide a continuous representation of discrete data. This allows the model
+to leverage the gradients from the differentiable classifier on all the categorical
+variables and produce counterfactual information. The pipeline of our method
+is shown in Figure 1.
+10
+
+--- Page 12 ---
+0.90.31.2 0 1 0 1
+Gumbel-softmax
+Normalization
+Reparameterization
+q sampling
+X1 X2 X3 X4 X5 X6 X7
+U-Net f
+f
+T
+X1 X2 X3 X4 X5 X6 X7
+Figure 1: The pipeline of Tabular Diffusion Counterfactual Explanations (TDCE). The
+categorical variables in the one-hot vector are first re-parameterized. Then, the q sampling
+generates the noisy version of the input sample. The denoising module runs T steps with
+the gradient from the classifier to generate the counterfactual sample.
+4.1. Tabular counterfactual generation
+We break a data point x into its continuous and categorical portions, xnum
+and xcat, respectively.
+Continuous features.. Here, we follow the adaptive parameterization [26] to
+implement the guided reverse process. The mean transition of Equation 9
+now becomes
+µ (xnum,t)+Σ (xnum,t)∥µ (xnum,t)∥g (10)
+θ t θ t θ t guided
+∇logp (y|f (x )) ∇d(x,f (x ))
+ϕ dn t dn t
+g = −
+guided
+∥∇logp (y|f (x ))∥ ∥∇d(x,f (x ))∥
+ϕ dn t dn t
+is the normalized gradient from the classifier and the normalized distance
+constraint.
+11
+
+--- Page 13 ---
+t=1000 t=900 t=800 t=700 t=600 t=500 t=400 t=300 t=200 t=100
+Figure2: AsimulationofdiffusionsfortheGumbel-softmaxvectoroverasinglecategorical
+variable with three classes. Each blue dot is a data point. Top: The reverse diffusion
+processfortheGumbel-softmaxvectorona3Dsimplexwithout classifierguidance. Bottom:
+The reverse diffusion process with classifier guidance.
+Intuitively, each original denoising step is guided by the classifier’s gradi-
+ents multiplied by the covariance of the denoising step and the magnitude
+of the unguided mean vector. This process takes the classifier’s impact into
+account and generates high-quality data not only around a dataset’s manifold
+butalsointheclusterofthetargetclass. Theproposedcounterfactualchanges
+should be minimal compared with the initial sample.
+Categorical features.. Working with Equation (8),
+logp (x |x ,y) = logp (x |x )+logp (y|f (x ))−logZ, (11)
+θ,ϕ t t+1 θ t t+1 ϕ dn t
+we observe that the adaptive parameterization approach cannot be straightfor-
+wardly applied because the gradient cannot be back-propagated to the discrete
+one-hot vector space. To guide the reverse process in discrete data scenarios,
+all combinations must be exhausted, which is infeasible and motivated recent
+developments [33].
+In this paper, we approach this problem through the Gumbel-softmax
+re-parameterization; instead of working in the discrete space, we propose to
+use the Gumbel-softmax vector to softly approximate the discrete data.
+12
+
+--- Page 14 ---
+4.2. Relaxation of categorical variables
+At each time step, a categorical variable is modeled as xcat ∼ Cat(xcat|π)
+where π ∈ ∆K−1 is a normalized nonnegative vector. A one-hot vector can be
+constructed as xcat = onehot(argmax g +logπ ), where g ∼ Gumbel(0,1).
+i i i i
+Following Jang et al. [34], and re-parameterize this as
+exp(1(g +logπ ))
+xcat = τ i i,t (12)
+(cid:101)i,t (cid:80)K exp(1(g +logπ ))
+j=1 τ j j,t
+at each time step of the reverse process, where τ ≥ 0 is the temperature. As
+is evident, as τ → 0, xcat reduces to a one-hot vector. Using this continuous
+(cid:101)t
+transformation, the logp (x |x ) term in Equation 11 can be modeled with
+θ t t+1
+a Gumbel-softmax vector. The density of Gumbel-softmax (GS) [34, 42] is
+(cid:18)
+(cid:88)
+K
+π
+(cid:19)−K
+(cid:89)
+K
+π
+p (x |π,τ) = Γ(K)τK−1 i i . (13)
+GS (cid:101)1:K xτ xτ+1
+i=1
+(cid:101)i
+i=1
+(cid:101)i
+Using Equation 12, we switch from the discrete one-hot representation to the
+continuous softmax representation. In the forward and backward process, the
+transitions are
+(cid:0) (cid:1)
+q(x |x ) ∼ GS x |π = (1−β )x +β /K ,
+(cid:101)t (cid:101)t−1 (cid:101)t t (cid:101)t−1 t
+q(x |x ,x ) ∼ GS
+(cid:0)
+x |π = π/
+(cid:80)K
+π
+(cid:1)
+, (14)
+(cid:101)t−1 (cid:101)t (cid:101)0 (cid:101)t−1 (cid:101) i=1(cid:101)i
+where π = [α x +(1−α )/K]⊙[α x +(1−α )/K]. The final categorical
+(cid:101) t(cid:101)t t t−1(cid:101)0 t−1
+sample can be obtained by xcat = onehot(argmax x). Equation 11 in the
+i(cid:101)
+Gumbel-softmax space reflects this change straightforwardly,
+logp (x |x ,y) = logp (x |x )+logp (y|f (x ))+const. (15)
+θ,ϕ (cid:101)t (cid:101)t+1 θ (cid:101)t (cid:101)t+1 ϕ dn (cid:101)t
+The reverseprocess p (x |x ) isa parameterizedneural network. Achallenge
+θ (cid:101)t (cid:101)t+1
+arises while solving the guided process with the Gumbel-softmax distribution
+13
+
+--- Page 15 ---
+not faced by Gaussian diffusions because the Gaussian model mathematically
+accommodates a first order Taylor approximation of the classifier well. There-
+fore, for the Gumbel-softmax we approximate the log density logp (x |x )
+θ (cid:101)t (cid:101)t+1
+as
+logp (x |x ) ≈ x⊤logπ (x )+const (16)
+θ (cid:101)t (cid:101)t+1 (cid:101)t θ (cid:101)t+1
+We evaluate this approximation in Section 4.3 in terms of a KL divergence
+bound between the Gumbel-softmax distribution and Equation 16.
+Next, we take the first order of Taylor expansion for the classifier around
+x , leading to
+(cid:101)t+1
+logp (y|x ) ≈ (x −x )⊤g +const (17)
+ϕ (cid:101)t (cid:101)t (cid:101)t+1 cat
+where g = ∇logp (y|x )| . Replacing Equations 16 & 17 in Equation
+cat ϕ (cid:101)t x (cid:101)t=x (cid:101)t+1
+15, the guided reverse process becomes
+logp (x |x ,y) ≈ x⊤(logπ (x )+λg )+const, (18)
+θ,ϕ (cid:101)t (cid:101)t+1 (cid:101)t θ (cid:101)t+1 cat
+where λ is a regularization hyperparameter. The familiar expression that
+results has a similar interpretation to the continuous case. We illustrate the
+reverse process dynamics of our approach in Figure 2.
+4.3. Closeness of the approximation
+At each reverse time step, the log density logp (x |x ) follows the
+θ (cid:101)t (cid:101)t+1
+Gumbel-softmax distribution p (x |x ). We model the log density as
+GS (cid:101)t (cid:101)t+1
+K
+1 (cid:89)
+p (x |x ) = π (x ) x (cid:101)t,i (19)
+θ (cid:101)t (cid:101)t+1 Z(x ) θ (cid:101)t+1 i
+(cid:101)t+1
+i
+where Z(x ) is the normalizing constant and π (·) is the probability estima-
+(cid:101)t+1 θ
+tor parameterized by a diffusion network.
+14
+
+--- Page 16 ---
+Figure 3: KL divergence between the Gumbel-softmax distribution and our approximation
+on simulated data as a function of temperature τ. The KL divergence increases as the τ
+grows as do the bounds.
+Theorem 4.1. Let x,π ∈ ∆K−1 and the temperature τ ∈ R+. Define x
+(cid:101) (cid:101)min
+the minimum value x can take. The KL divergence between p defined in
+(cid:101) GS
+Equation 13 and its approximation p in Equation 19 is bounded as follows:
+θ
+KL(p ∥p ) <−K(τ +1)log[1−x ]+(K −1)logτ
+GS θ (cid:101)min
++(K −1)log[1−x ]
+(cid:101)min
++logΓ(K)+Klog[(1−x )/(K −1)!]
+(cid:101)min
+KL(p ∥p ) > K(τ +1)logx +(K −1)logτ
+GS θ (cid:101)min
++(K −1)log[x ]
+(cid:101)min
++logΓ(K)+Klog[1/(K −1)!]
+Proof: See the supplementary material.
+An empirical example of the bound is shown in Figure 3. The benefits of
+our proposed approximation are:
+1) It allows us to use the first order Taylor expansion, resulting in a closed-
+form update at each time step for the reverse process. This update
+directs the unguided logits with the gradient of classifier towards the
+15
+
+--- Page 17 ---
+target class, which is intuitive and similar to the Gaussian case.
+2) The Taylor expansion, which is also applied to the Gaussian case, re-
+quires no additional step for guided categorical variables. The gradient
+can be calculated concurrently with the Gaussian case over any contin-
+uous variables in the data, which significantly reduces computational
+complexity.
+Although a lower temperature leads to a better approximation, it also
+introduces a larger variance and may result in vanishing gradient issues.
+As τ → 0, the soft representation approaches a one-hot vector, which may
+prevent backwards flow of the gradients through the softmax function. A
+lower temperature can also introduce significant variance of the estimated
+gradients. To see this, let Y = softmax((z +g )/τ) where g is the Gumbel
+i i i i
+noise. The partial derivative ∂Y /∂z = 1Y (δ −Y ), which is bounded above
+i j τ i ij j
+by 1 , and so Var(∂Y /∂z ) ≤ E[(∂Y /∂z )2] < 1 . For the lower bound, the
+4τ i j i j 16τ2
+integral over the Gumbel noise is required, which is complicated. However,
+we know that ∂Y /∂z ≥ B for some constant B, meaning both bounds of
+i j τ
+the variance indicate that it becomes larger as the temperature decreases. In
+implementation, we therefore start with a warmer temperature and gradually
+decrease to a smaller value away from zero.
+4.4. Immutable features
+Immutable features are those that are predefined as unchangeable by
+the source of a datum, e.g., a location. When generating counterfactuals,
+these cannot be changed. One simple approach is to define a binary mask
+m indicating which features can change, and produce the counterfactual
+16
+
+--- Page 18 ---
+Algorithm 1 Tabular diffusion counterfactual explanations
+Require: Input x of continuous xnum and categorical features xcat. Binary
+mask m of immutable features in x. Classifier f and denoiser f
+dn
+√ √
+1: xnum ∼ N(x | α x , 1−α I)
+t t t 0 t
+xcat ∼ GS(x |α x +(1−α )/K)
+(cid:101)t (cid:101)t t(cid:101)0 t
+2: for iteration t = T,...,0 do
+3: gnum = ∇logp ϕ (y|f dn (xt))
+∥∇logp
+ϕ
+(y|f
+dn
+(xt))∥
+4: gcat = ∇logp (y|x )|
+ϕ (cid:101)t x (cid:101)t=x (cid:101)t+1
+5: µ,Σ ← µ ([xnum,xcat]),Σ ([xnum,xcat])
+θ t (cid:101)t θ t (cid:101)t
+6: xnum ← µnum +∥µnum∥Σnumgnum
+7: xcat ← µcat +∥µcat∥gcat
+(cid:101)
+8: x ← [xnum,xcat]⊙m+[xnum,xcat]⊙(1−m)
+t−1 (cid:101) t (cid:101)t
+9: end for
+x ∗m+x∗(1−m). The main issue here is with so-called coherence [43],
+t
+yielding samples that fall outside the data manifold.
+Motivated by the blended diffusions of vision tasks [43], we combine the
+noisy version of the immutable features from the input with the guided
+mutable features according to x ∗m+x ∗(1−m) where x is
+t,guided t,noisy t,noisy
+obtained from the forward process. At the final step, the immutable features
+are replaced by the original input. Our algorithm is shown in Algorithm 1.
+5. Experiments
+We compare our method with other popular methods for generating
+counterfactual explanations. The classifier f to be explained shares the same
+architecture as the U-net in the diffusion model and the last layer outputs
+17
+
+--- Page 19 ---
+Dataset #Train #Val #Test #Num #Cat
+LCD 10,000 1,000 1,000 5 1
+GMC 15,000 1,000 1,000 9 1
+Adult 47,842 1,000 1,000 9 2
+LAW 5,502 1,000 1,000 8 3
+Table 1: Statistics from the tabular data sets we use.
+two dimensional logits for binary classification. We refer to our method as
+Tabular Diffusion Counterfactual Explanation (TDCE).
+5.1. Datasets
+We focus on tabular datasets, selecting popular and public datasets that
+consists of both numerical and categorical features. A description of data is
+shown in Table 1. Lending Club Dataset (LCD) and Give Me Some Credit
+(GMC) focus on credit lending decisions. “Adult” predicts binarized annual
+income based on a set of features. The LAW data predicts pass/fail on a
+law school test. In all the experiments, we perform standardization for each
+continuous feature and convert each categorical feature to one-hot vector.
+5.2. Baselines and evaluation metrics
+As a baseline, we compare with five methods for generating counterfactual
+explainations of a binary classifier. Wachter et al. [12] present the most
+straightforward baseline. They generate counterfactuals by following the gra-
+dients of a classifier from the input x to the decision boundary. However, as we
+show in the next section, this simple and intuitive approach struggles to gener-
+ate realistic counterfactuals. We also benchmark against VAE-based methods
+designed to fix this, including CCHVAE [22], REVISE [20], and CLUE [21],
+18
+
+--- Page 20 ---
+as well as a method based on graph search called FACE [13] and the neural
+network based method CounterNet [36]. We implement these benchmarks
+using the CARLA library [44] with their default parameterizations.
+Weevaluatethesemethodsusingseveralwidelyusedmetricsforcounterfactual-
+based explainability: Interpretability, Diversity, Validity, Instability and the
+JS divergence. Among these, Diversity and Instability are restricted to contin-
+uous features, while JS divergence applies only to categorical features. There
+is no global metric that quantifies counterfactual performance, and so the
+set of metrics described below combines to paint a subjective picture for
+evaluation.
+L2 Distance.. Counterfactual samples aim to have turned their label to the
+target class with the minimum changes in the feature space. This is the key
+standard of counterfactual generation described in Equation 1 and can be
+quantified using L2 distance,
+N
+1 (cid:88)
+L2 = ||x −xcf||2, (20)
+N i i 2
+i=1
+Please note that this metric can only evaluate continuous features. For
+categorical features, we aim to recover the distribution of the categorical
+variable in the target class, which will be described later.
+Interpretability.. Van Looveren and Klaise [14] use an autoencoder to
+evaluate the interpretability of a counterfactual method. Let AE , AE , and
+o t
+AE be three autoencoders trained on the original class, target class, and the
+19
+
+--- Page 21 ---
+entire dataset, respectively. The IM1 and IM2 scores are
+1 (cid:88) N ∥xcf −AE (xcf)∥2
+IM1 = i t i
+N ∥xcf −AE (xcf)∥2 +ϵ
+i=1 i o i
+1 (cid:88) N ∥AE (xcf)−AE(xcf)∥2
+IM2 = t i i (21)
+N ∥xcf∥ +ϵ
+i=1 i 1
+wherexcf istheithofN counterfactuals. LowervalueofIM1indicatesthatthe
+i
+generated counterfactuals are reconstructed better by the autoencoder trained
+on the counterfactual class (AE ) than the autoencoder trained on the original
+t
+class. This suggests that the counterfactual is closer to the data manifold of
+the counterfactual class, and thus more plausible. A similarly interpretation
+holds for IM2. Hence, lower values of IM1 and IM2 are preferred.
+Diversity.. Diversity provides additional performance information because
+low IM1 and IM2 may occur with counterfactuals that tend to merge to a
+single point; not only should the counterfactual look like the counterclass, it
+should also preserve its variety. The diversity metric is calculated as
+N N
+1 (cid:88) (cid:88)
+Diversity = d(xcf,xcf), (22)
+N(N −1) i j
+i=1 j=i+1
+where d(·,·) is a predefined distance function. We use the Euclidean distance
+in this paper.
+Validity.. This metric verifies that the generated counterfactual indeed lies
+in the counter-class region of the classifier to be explained. This is
+N
+1 (cid:88)
+Validity = ⊮(f(xcf) = y′) (23)
+N i
+i=1
+20
+
+--- Page 22 ---
+where f(·) is the explained classifier and y′ is the target label. (Not all
+counterfactualmethodsgeneratecounterfactualsthatareguaranteedtochange
+their label.)
+Instability.. A stable counterfactual explainer should produce similar coun-
+terfactual outputs for two similar query inputs. Instability quantifies this
+as
+1 (cid:88) N d(xcf,xcf)
+Instability = i (cid:98)i
+N 1+d(x ,x )
+i (cid:98)i
+i=1
+where x = argmin ∥x − x ∥, the point within the data set
+(cid:98)i x∈X\xi,f(x)=f(xi) i
+closest to x that has the same label. A low instability is preferred.
+i
+JS Divergence.. Wealsoevaluatehowwellthedistributionofcounterfactual
+categorical variables aligns with the distribution of the target class. We
+calculate the average JS divergence across categorical variables,
+Nc
+1 (cid:88)
+JS = JS(P (x )∥P (x )) (24)
+Nc target i CF i
+i=1
+where Nc is the number of categorical variables. A lower JS score indicates
+similarity between the distributions of generated counterfactuals and the
+target class.
+5.3. Results
+Quantitative evaluation.. We show quantitative results in Table 2 and Table
+3. The Table 2 is for the no-masking setting, while the Table 3 is for
+masking a preselected feature, prohibiting it from being changed by the
+counterfactual generator. While there is no single combination of these
+various metrics that determines relative performance, a subjective evaluation
+21
+
+--- Page 23 ---
+CounterfactualEvaluations
+Model L2↓ Diversity↑ Instability↓ JS↓ IM1↓ IM2↓ Validity↑
+DCL
+Wach. 0.34±0.02 0.73±0.03 0.11±0.03 0.12±0.03 1.33±0.04 0.16±0.03 0.60±0.03
+CCH. 0.56±0.03 0.19±0.01 0.21±0.02 0.09±0.01 0.57±0.01 0.08±0.01 0.99±0.01
+REVI. 0.59±0.01 0.18±0.03 0.22±0.02 0.10±0.01 0.89±0.03 0.09±0.02 0.99±0.01
+CLUE 0.70±0.02 0.26±0.03 0.31±0.03 0.11±0.01 0.72±0.04 0.11±0.01 0.83±0.03
+FACE 0.69±0.01 0.54±0.05 0.11±0.01 0.06±0.01 0.91±0.07 0.11±0.03 0.85±0.02
+CounterNet 0.35±0.01 0.45±0.03 0.25±0.02 0.15±0.02 0.99±0.03 0.69±0.03 0.99±0.01
+TDCE 0.59±0.03 0.73±0.03 0.05±0.01 0.01±0.01 0.63±0.03 0.05±0.01 0.99±0.01
+CMG
+Wach. 0.03±0.02 0.25±0.02 0.09±0.01 0.03±0.01 1.04±0.05 0.07±0.01 0.73±0.03
+CCH. 0.21±0.03 0.21±0.01 0.10±0.01 0.06±0.02 1.14±0.05 0.15±0.02 0.77±0.02
+REVI. 0.23±0.02 0.21±0.02 0.13±0.01 0.05±0.01 1.18±0.05 0.07±0.01 0.80±0.02
+CLUE 0.18±0.02 0.18±0.02 0.07±0.01 0.08±0.01 1.14±0.04 0.07±0.01 0.81±0.02
+FACE 0.21±0.02 0.17±0.02 0.05±0.01 0.07±0.01 1.18±0.01 0.08±0.01 0.86±0.01
+CounterNet 0.20±0.01 0.17±0.02 0.10±0.01 0.06±0.01 1.02±0.02 0.11±0.02 0.97±0.01
+TDCE 0.18±0.03 1.08±0.06 0.05±0.01 0.03±0.01 0.96±0.04 0.06±0.02 0.99±0.01
+tludA
+Wach. 0.27±0.03 1.11±0.01 0.09±0.01 0.13±0.01 1.31±0.03 0.05±0.01 0.57±0.02
+CCH. 0.79±0.03 0.19±0.02 0.22±0.02 0.11±0.02 1.89±0.07 0.06±0.02 0.61±0.03
+REVI. 0.99±0.02 0.43±0.02 0.10±0.01 0.11±0.01 1.11±0.01 0.07±0.01 0.58±0.02
+CLUE 0.81±0.03 0.11±0.01 0.04±0.01 0.17±0.03 1.41±0.05 0.04±0.01 0.62±0.01
+FACE 0.89±0.02 0.74±0.04 0.07±0.01 0.06±0.01 0.97±0.02 0.06±0.01 0.75±0.02
+CounterNet 0.86±0.02 0.69±0.02 0.07±0.02 0.09±0.01 0.96±0.02 0.06±0.01 0.94±0.01
+TDCE 0.85±0.04 0.80±0.03 0.05±0.01 0.03±0.02 0.90±0.02 0.04±0.01 0.94±0.04
+WAL
+Wach. 0.17±0.04 1.22±0.05 0.13±0.02 0.11±0.02 1.73±0.02 0.12±0.02 0.58±0.01
+CCH. 0.99±0.02 0.20±0.01 0.07±0.01 0.05±0.01 0.95±0.03 0.09±0.02 0.99±0.01
+REVI. 0.71±0.03 0.91±0.03 0.06±0.01 0.06±0.01 1.56±0.05 0.11±0.01 0.61±0.01
+CLUE 0.79±0.02 0.37±0.01 0.07±0.01 0.05±0.01 1.21±0.02 0.06±0.02 0.99±0.01
+FACE 0.81±0.02 0.83±0.02 0.03±0.01 0.04±0.01 1.31±0.06 0.11±0.02 0.81±0.02
+CounterNet 0.79±0.01 0.91±0.02 0.07±0.01 0.06±0.01 0.93±0.03 0.08±0.01 0.99±0.01
+TDCE 0.81±0.02 0.97±0.03 0.06±0.02 0.04±0.02 0.89±0.05 0.06±0.01 0.99±0.01
+Table 2: Counterfactual quantitative evaluation without masking of features that are
+allowed to change. We provide an evaluation according to the metrics described in the text.
+The arrow beside each metric indicates the preferred value. We select one feature to mask
+in the masking setting. (bold = 1st, underline = 2nd). Note: The classifier in CounterNet
+requires a different architecture because it is model-dependent.
+22
+
+--- Page 24 ---
+CounterfactualEvaluations
+Model L2↓ Diversity↑ Instability↓ IM1↓ IM2↓ Validity↑
+Wach. 0.34±0.03 0.73±0.03 0.12±0.01 1.04±0.05 0.27±0.03 0.75±0.03
+CCH. 0.50±0.03 0.36±0.03 0.29±0.02 0.64±0.05 0.16±0.01 0.98±0.01
+REVI. 0.52±0.02 0.33±0.03 0.21±0.02 0.82±0.04 0.19±0.02 0.98±0.01
+LCD CLUE 0.49±0.02 0.38±0.04 0.24±0.02 0.92±0.02 0.15±0.01 0.81±0.02
+FACE 0.69±0.02 0.55±0.03 0.17±0.01 0.79±0.07 0.20±0.01 0.87±0.01
+CounterNet 0.35±0.01 0.45±0.03 0.25±0.02 1.09±0.03 0.88±0.03 0.99±0.01
+TDCE 0.49±0.02 0.77±0.03 0.09±0.02 0.77±0.02 0.06±0.02 0.99±0.01
+Wach. 0.04±0.01 0.23±0.02 0.10±0.01 1.13±0.09 0.13±0.02 0.57±0.03
+CCH. 0.17±0.02 0.21±0.01 0.11±0.01 1.19±0.03 0.15±0.01 0.52±0.02
+REVI. 0.16±0.02 0.21±0.02 0.12±0.01 1.10±0.05 0.17±0.01 0.53±0.02
+GMC CLUE 0.11±0.02 0.20±0.02 0.08±0.01 1.32±0.05 0.13±0.01 0.57±0.01
+FACE 0.09±0.03 0.16±0.02 0.07±0.02 1.03±0.02 0.13±0.02 0.65±0.02
+CounterNet 0.20±0.01 0.17±0.02 0.10±0.01 1.09±0.02 0.16±0.02 0.90±0.01
+TDCE 0.11±0.02 0.83±0.03 0.06±0.01 0.99±0.03 0.05±0.01 0.94±0.02
+Wach. 0.28±0.04 1.01±0.03 0.15±0.01 1.00±0.05 0.07±0.01 0.51±0.02
+CCH. 0.62±0.03 0.72±0.03 0.17±0.02 1.11±0.03 0.11±0.01 0.55±0.03
+REVI. 0.78±0.03 0.78±0.02 0.09±0.01 1.11±0.06 0.07±0.01 0.61±0.02
+Adult CLUE 0.61±0.03 0.71±0.03 0.07±0.01 1.14±0.03 0.06±0.01 0.55±0.01
+FACE 0.85±0.02 0.79±0.02 0.08±0.01 1.02±0.02 0.06±0.01 0.58±0.02
+CounterNet 0.86±0.02 0.69±0.02 0.07±0.02 1.03±0.02 0.10±0.01 0.84±0.01
+TDCE 0.79±0.03 0.82±0.03 0.06±0.02 0.93±0.04 0.05±0.02 0.86±0.04
+Wach. 0.26±0.02 1.12±0.02 0.13±0.02 1.54±0.01 0.14±0.01 0.39±0.03
+CCH. 0.89±0.02 0.75±0.02 0.05±0.01 1.43±0.02 0.13±0.03 0.99±0.01
+REVI. 0.80±0.03 1.02±0.02 0.09±0.02 1.37±0.02 0.11±0.01 0.60±0.01
+LAW CLUE 0.81±0.02 0.68±0.01 0.07±0.02 0.76±0.01 0.09±0.01 0.99±0.01
+FACE 0.92±0.01 0.81±0.03 0.04±0.01 1.63±0.01 0.16±0.01 0.80±0.03
+CounterNet 0.79±0.01 0.91±0.02 0.07±0.01 0.96±0.03 0.09±0.01 0.98±0.01
+TDCE 0.79±0.02 0.95±0.03 0.05±0.01 0.73±0.03 0.07±0.01 0.98±0.02
+Table 3: Counterfactual quantitative evaluation with masking of features that are allowed
+to change. We provide an evaluation according to the metrics described in the text. The
+arrow beside each metric indicates the preferred value. We select one feature to mask in
+the masking setting. (bold = 1st, underline = 2nd)
+23
+
+--- Page 25 ---
+indicates competitive performance of our TDCE method. For example, it
+achieves the best validity among other methods with significant margins,
+indicating nearly all the generated samples have turned to the target class –
+arguably a prerequisite for other metrics to have meaning. We observe the
+competitive or superior performance on IM1 and IM2 as well, indicating that
+the generated counterfactuals stay on the data manifold of the target class
+and have better interpretability.
+In the experiments, the baseline Wachter shows volatile performance in
+terms of the metrics across different datasets. It is able to produce robust
+samples with fair diversity, but it lacks interpretability such as on LCD. We
+also note that CCHVAE, REVISE and CLUE show strong robustness (low
+instability). However, these results are usually accompanied by a low diversity
+score, indicating that the algorithms tends to generate similar counterfactuals.
+The same conclusion can also be drawn from their relatively high JS score,
+a high JS score suggesting that the generated categorical variables do not
+match the distribution in the target class.
+To give a concrete example of what we observed, when analyzing the LCD
+dataset we found that the FICO score dominates the classifier’s decision, while
+the categorical loan-term variable is less important. All benchmark methods
+tend to completely ignore the less significant feature because changing one’s
+FICO score quickly changes the classification. In contrast, our TDCE method
+pays more attention to each feature, which creates less discrepancy between
+the distributions of the counterfactual and counter-class data. We also note
+that TDCE is faster compared with other searching algorithms. Wachter,
+REVISE and FACE require iterative searching for each individual sample,
+24
+
+--- Page 26 ---
+while TDCE’s reverse process is a fixed Markov chain learned during training.
+Proximity.. We evaluate the proximity between the generated counterfactual
+sample and the original query samples using L2 distance. In the experiments,
+we observe that Wachter has achieved the lowest L2 distance across all the
+datasets. This is because Wachter stops searching when it finds the sample
+that changes its label with minimum modification in the feature space. This
+can produce a sample around the decision boundary, though by using minimal
+changes it might produce less a meaningful explanation that is out of sample
+(i.e. has high IM1/IM2). We emphasize that we are focusing on a higher
+validity and greater interpretability (i.e. low IM1/IM2) and therefore are
+willing to sacrifice on L2 distance. Nevertheless, our TDCE is adjustable for
+the importance of L2 distance by simply adding a regularization to Equation
+10.
+Efficency.. We show the runtime for generating counterfactual samples in
+Table 4. We observe that CounterNet runs faster than other methods because
+it generates the counterfactuals through a single forward pass of a neural
+network. However, we highlight that our TDCE is model-agnostic, whereas
+CounterNet is model-dependent, requiring the encoder to be the classifier as
+well. In addition, TDCE is capable of generating more interpretable samples
+(i.e. low IM2/IM2) for all datasets we consider. Aside from CounterNet,
+TDCE runs faster than all other search-based algorithms because TDCE can
+generate the counterfactual samples in a pre-defined number of reverse steps,
+while search algorithms rely heavily on the objective function.
+25
+
+--- Page 27 ---
+CounterfactualGenerationTime(sec/100sample)
+Model
+Wach. CCH. REVI. CLUE FACE CounterNet TDCE
+Dataset
+LCD 0.9 0.8 0.8 0.9 1.0 0.1 0.3
+GMC 1.1 1.2 1.1 1.3 1.5 0.2 0.5
+Adult 1.1 1.3 1.2 1.3 1.6 0.2 0.5
+LAW 1.0 1.1 1.1 1.2 1.4 0.1 0.4
+Table 4: Counterfactual generation time in seconds per 100 samples on the same computer
+setting.
+Discussion.. Through the experiments, each benchmark shows a good ability
+to generate counterfactuals, yet they are somewhat limited due to design
+issues. Gradient-based method such as Wachter, which directly operate in
+the feature space, can often be fooled by spurious changes. This causes
+the classifier to change its prediction by small, uninterpretable movements.
+VAE-based methods such as CLUE, REVISE and CCHVAE leverage the
+generative power of VAEs but heavily rely on the black-box latent space in
+which they work. This may lead to counterfactuals that fall off the data
+manifold. Graph methods like FACE depend on sample quality and coverage,
+and search only within the graph itself, producing a sample that already
+exists in the data set. In contrast, our TDCE uses a diffusion model operating
+directly in the ambient features space. This connects it to Wachter, while still
+leveraging the generative power available to deep models such as the VAE.
+We believe the combination of these desireable aspects accounts for our good
+relative performance.
+Qualitative evaluations. We also provide a qualitative comparison on the
+LCD dataset in Figure 4. LCD contains five numerical features and one
+26
+
+--- Page 28 ---
+Figure 4: Qualitative comparisons between TDCE and others methods on LCD dataset.
+Top: the absolute difference between the correlation of counterfactual samples and that of
+the target class for the continuous features (debt-to-income ratio, loan amount, interest
+rate, annual income, FICO score). Middle: Bar plots for the categorical variable (loan
+term: 36 months or 60 months). Bottom: The same metrics as the top when masking the
+categorical variable. Note: The absolute difference is the same for CounterNet because it
+simply copies the immutable features from the query sample.
+categorical feature. In the non-mask setting, all features are guided by the
+classifier. Darker pixels show greater discrepancy between the counterfactual
+sample and the target class. As we can see from the first row, TDCE has
+fewer darker pixels in general. Importantly, in the middle row, the generated
+categorical variables from TDCE perfectly match the distribution of the target
+class. In the masking setting, we fix the categorical variable and only guide
+the continuous features. In general, the distributional agreement between the
+target class and the counterfactual class is much greater with TDCE than
+with other methods.
+Discussion on temperature τ. We evaluate the temperature τ over IM1, IM2,
+JS and Validity on LCD dataset in Figure 5.The temperature affects the
+27
+
+--- Page 29 ---
+overall counterfactual performance significantly. As the temperature drops,
+the Gumbel-softmax approaches to a one-hot vector. However, this blocks
+the flow of gradients from the classifier back to the categorical variable,
+producing the vanishing gradient issue. In this case, the reverse process is
+mainly governed by the continuous features. This does not automatically
+prevent a model from generating valid counterfactual samples because the
+categorical variables might not be significant in the prediction. However, it
+doespreventthemodelfromgeneratingrealisticcounterfactualsamples, which
+diminishes the legitimacy of counterfactual explanations. As the temperature
+Figure 5: An analysis on the temperature τ of LCD dataset. The best JS score is achieved
+when τ =0.3 with balanced IM1 and IM2 scores.
+increases, the counterfactual generator tends to recover the distribution of
+the categorical variable in the target class. However, according to Theorem
+4.1, our reverse process might diverge from the true reverse process as the
+temperature becomes larger. The resulting model then may not be able to
+recover the distribution of categorical variables well. In the experiments, we
+search the best τ ranging from 0.1 to 5 for each dataset.
+28
+
+--- Page 30 ---
+6. Conclusion
+We proposed a tabular diffusion model that generates counterfactual ex-
+planations for a classifier. We leverage the Gumbel-softmax distribution to
+re-parameterize one-hot vectors into a continuous vector, which allows us to
+utilize the gradients from the classifier to guide the reverse process. We pro-
+vided theoretical bounds and experimented on four popular tabular datasets.
+Quantitative results support that our method combines the advantages of
+working directly in the feature space of Wachter and graph methods with the
+advantage of neural networks of VAE-based methods.
+References
+[1] M. T. Ribeiro, S. Singh, C. Guestrin, ” why should i trust you?” ex-
+plaining the predictions of any classifier, in: International Conference on
+Knowledge Discovery and Data Mining, 2016.
+[2] M. Ibrahim, M. Louie, C. Modarres, J. Paisley, Global explanations of
+neural networks: Mapping the landscape of predictions, in: AAAI/ACM
+Conference on AI, Ethics, and Society, 2019.
+[3] A. Shrikumar, P. Greenside, A. Kundaje, Learning important features
+through propagating activation differences, in: International Conference
+on Machine Learning, 2017.
+[4] M. Sundararajan, A. Taly, Q. Yan, Axiomatic attribution for deep
+networks, in: International Conference on Machine Learning, 2017.
+29
+
+--- Page 31 ---
+[5] S. Lundberg, S.-I. Lee, A unified approach to interpreting model predic-
+tions, in: Advances in Neural Information Processing Systems, 2017.
+[6] L. T. Liu, S. Barocas, J. Kleinberg, K. Levy, On the actionability of
+outcome prediction, in: AAAI Conference on Artificial Intelligence, 2024.
+[7] L. T. Liu, S. Dean, E. Rolf, M. Simchowitz, M. Hardt, Delayed impact of
+fair machine learning, in: International Conference on Machine Learning,
+2018.
+[8] R. Agarwal, L. Melnick, N. Frosst, X. Zhang, B. Lengerich, R. Caruana,
+G. E. Hinton, Neural additive models: Interpretable machine learning
+with neural nets, in: Advances in Neural Information Processing Systems,
+2021.
+[9] F. Radenovic, A. Dubey, D. Mahajan, Neural basis models for inter-
+pretability, in: Advances in Neural Information Processing Systems,
+2022.
+[10] C.-H. Chang, R. Caruana, A. Goldenberg, Node-GAM: Neural gen-
+eralized additive model for interpretable deep learning, International
+Conference on Learning Representations (2022).
+[11] W. Zhang, B. Barr, J. Paisley, Gaussian process neural additive models,
+in: AAAI Conference on Artificial Intelligence, 2024.
+[12] S. Wachter, B. Mittelstadt, C. Russell, Counterfactual explanations
+without opening the black box: Automated decisions and the GDPR,
+Harvard Journal of Law & Tech. 31 (2017) 841.
+30
+
+--- Page 32 ---
+[13] R. Poyiadzi, K. Sokol, R. Santos-Rodriguez, T. De Bie, P. Flach, FACE:
+feasible and actionable counterfactual explanations, in: AAAI/ACM
+Conference on AI, Ethics, and Society, 2020.
+[14] A. Van Looveren, J. Klaise, Interpretable counterfactual explanations
+guided by prototypes, in: Joint European Conference on Machine
+Learning and Knowledge Discovery in Databases, 2021.
+[15] S.Dandl, C.Molnar, M.Binder, B.Bischl, Multi-objectivecounterfactual
+explanations, in: International Conference on Parallel Problem Solving
+from Nature, 2020.
+[16] R. Guidotti, A. Monreale, S. Ruggieri, D. Pedreschi, F. Turini, F. Gi-
+annotti, Local rule-based explanations of black box decision systems,
+arXiv preprint arXiv:1805.10820 (2018).
+[17] R. K. Mothilal, A. Sharma, C. Tan, Explaining machine learning clas-
+sifiers through diverse counterfactual explanations, in: Conference on
+Fairness, Accountability, and Transparency, 2020.
+[18] R. R. Fern´andez, I. M. De Diego, V. Acen˜a, A. Fern´andez-Isabel, J. M.
+Moguerza, Random forest explainability using counterfactual sets, Infor-
+mation Fusion 63 (2020) 196–207.
+[19] D. P. Kingma, Auto-encoding variational Bayes, arXiv preprint
+arXiv:1312.6114 (2013).
+[20] S. Joshi, O. Koyejo, W. Vijitbenjaronk, B. Kim, J. Ghosh, Towards
+realistic individual recourse and actionable explanations in black-box
+decision making systems, arXiv preprint arXiv:1907.09615 (2019).
+31
+
+--- Page 33 ---
+[21] J. Antor´an, U. Bhatt, T. Adel, A. Weller, J. M. Hern´andez-Lobato,
+Getting a clue: A method for explaining uncertainty estimates, arXiv
+preprint arXiv:2006.06848 (2020).
+[22] M. Pawelczyk, K. Broelemann, G. Kasneci, Learning model-agnostic
+counterfactual explanations for tabular data, in: The Web Conference,
+2020.
+[23] J. Ho, A. Jain, P. Abbeel, Denoising diffusion probabilistic models, in:
+Advances in Neural Information Processing Systems, 2020.
+[24] J. Song, C. Meng, S. Ermon, Denoising diffusion implicit models, arXiv
+preprint arXiv:2010.02502 (2020).
+[25] P. Dhariwal, A. Nichol, Diffusion models beat GANs on image synthesis,
+in: Advances in Neural Information Processing Systems, 2021.
+[26] M. Augustin, V. Boreiko, F. Croce, M. Hein, Diffusion visual counter-
+factual explanations, in: Advances in Neural Information Processing
+Systems, 2022.
+[27] E. Hoogeboom, D. Nielsen, P. Jaini, P. Forr´e, M. Welling, Argmax
+flows and multinomial diffusion: Learning categorical distributions, in:
+Advances in Neural Information Processing Systems, 2021.
+[28] H. Sun, L. Yu, B. Dai, D. Schuurmans, H. Dai, Score-based continuous-
+time discrete diffusion models, arXiv preprint arXiv:2211.16750 (2022).
+[29] S. Dieleman, L. Sartran, A. Roshannai, N. Savinov, Y. Ganin, P. H.
+32
+
+--- Page 34 ---
+Richemond,A.Doucet,R.Strudel,C.Dyer,C.Durkan,etal., Continuous
+diffusion for categorical data, arXiv preprint arXiv:2211.15089 (2022).
+[30] A. Kotelnikov, D. Baranchuk, I. Rubachev, A. Babenko, Tabddpm: Mod-
+elling tabular data with diffusion models, in: International Conference
+on Machine Learning, 2023.
+[31] F. Regol, M. Coates, Diffusing Gaussian mixtures for generating cate-
+gorical data, in: AAAI Conference on Artificial Intelligence, 2023.
+[32] N. Gruver, S. Stanton, N. Frey, T. G. Rudner, I. Hotzel, J. Lafrance-
+Vanasse, A. Rajpal, K. Cho, A. G. Wilson, Protein design with guided
+discrete diffusion, in: Advances in Neural Information Processing Sys-
+tems, 2024.
+[33] Y.Schiff, S.S.Sahoo, H.Phung, G.Wang, S.Boshar, H.Dalla-torre, B.P.
+de Almeida, A. Rush, T. Pierrot, V. Kuleshov, Simple guidance mech-
+anisms for discrete diffusion models, arXiv preprint arXiv:2412.10193
+(2024).
+[34] E. Jang, S. Gu, B. Poole, Categorical reparameterization with Gumbel-
+softmax, in: International Conference on Learning Representations,
+2017.
+[35] A. Nazabal, P. M. Olmos, Z. Ghahramani, I. Valera, Handling incomplete
+heterogeneous data using vaes, Pattern Recognition 107 (2020) 107501.
+[36] H. Guo, T. H. Nguyen, A. Yadav, Counternet: End-to-end training of
+prediction aware counterfactual explanations, in: Proceedings of the 29th
+33
+
+--- Page 35 ---
+ACM SIGKDD Conference on Knowledge Discovery and Data Mining,
+2023, pp. 577–589.
+[37] H. Guo, F. Jia, J. Chen, A. Squicciarini, A. Yadav, Rocoursenet: Robust
+training of a prediction aware recourse model, in: Proceedings of the
+32nd ACM International Conference on Information and Knowledge
+Management, 2023, pp. 619–628.
+[38] W. Zhang, B. Barr, J. Paisley, An interpretable deep classifier for coun-
+terfactual generation, in: Proceedings of the Third ACM International
+Conference on AI in Finance, 2022, pp. 36–43.
+[39] J. Su, D. V. Vargas, K. Sakurai, One pixel attack for fooling deep neural
+networks, IEEE Transactions on Evolutionary Computation 23 (2019)
+828–841.
+[40] J. Sohl-Dickstein, E. Weiss, N. Maheswaranathan, S. Ganguli, Deep
+unsupervised learning using nonequilibrium thermodynamics, in: Inter-
+national Conference on Machine Learning, 2015.
+[41] A. Q. Nichol, P. Dhariwal, Improved denoising diffusion probabilistic
+models, in: International Conference on Machine Learning, 2021.
+[42] C. J. Maddison, A. Mnih, Y. W. Teh, The concrete distribution: A
+continuous relaxation of discrete random variables, arXiv preprint
+arXiv:1611.00712 (2016).
+[43] O. Avrahami, D. Lischinski, O. Fried, Blended diffusion for text-driven
+editing of natural images, in: IEEE Conference on Computer Vision and
+Pattern Recognition, 2022.
+34
+
+--- Page 36 ---
+[44] M. Pawelczyk, S. Bielawski, J. v. d. Heuvel, T. Richter, G. Kasneci,
+CARLA: A Python library to benchmark algorithmic recourse and coun-
+terfactual explanation algorithms, in: Neural Information Processing
+Systems Track on Datasets and Benchmarks, 2021.
+35
+
+--- Page 37 ---
+Appendix A. Proof of the closeness of the approximated Gumbel
+Softmax distribution
+Lemma Appendix A.1. Given π,x ∈ △K−1 be a probability simplex vector
+(cid:101)
+and x ≥ x > 0. For an arbitrary temperature τ ∈ R+, the lower bound of
+(cid:101) (cid:101)min
+K
+(cid:88) π
+i
+l = min (A.1)
+xτ
+i
+(cid:101)i
+has the range
+1 ≤ l ≤ Kτ (A.2)
+The upper bound is:
+K
+(cid:88) π 1
+i
+≤ (A.3)
+xτ xτ
+i
+(cid:101)i (cid:101)min
+Proof. We know that f(u) = uτ for τ > 0 is strictly convex. Thus, we know
+K
+that (cid:80) πi is also strictly convex, indicating that any minimum point is the
+xτ
+i (cid:101)i
+global minimum. Then, we can set up the constrained optimization problem:
+K
+(cid:88)
+min F(x) = π x−τ (A.4)
+(cid:101) i(cid:101)i
+x∈∆K−1
+i
+K
+(cid:88)
+subject x = 1 (A.5)
+(cid:101)j
+j
+The Lagrangian multiplier can be established as:
+K K
+(cid:88) (cid:88)
+L(x,λ) = π x−τ +λ( x −1) (A.6)
+(cid:101) i(cid:101)i (cid:101)j
+i j
+Taking the derivative w.r.t. x :
+(cid:101)j
+∂L τπ
+∂x = π j x (cid:101) − j τ−1(−τ)+λ = 0 → x (cid:101)j = ( λ j )τ+ 1 1 (A.7)
+(cid:101)j
+36
+
+--- Page 38 ---
+Enforcing the constraint
+(cid:80)K
+x = 1 leads to:
+i (cid:101)i
+K
+(cid:88) 1
+λ = τ( πτ+1)τ+1 (A.8)
+i
+i
+Combining together:
+1
+πτ+1
+x∗ = i (A.9)
+(cid:101)i
+(cid:80) K 1
+πτ+1
+j
+j
+The minimum value of F(x) is:
+(cid:101)
+K
+(cid:88) 1
+F(x∗) = ( πτ+1)τ+1 (A.10)
+(cid:101) i
+i
+By generalized Ho¨lder inequality, this has the range:
+1 ≤ F(x∗) ≤ Kτ (A.11)
+(cid:101)
+The upper bound can be derived by setting x = x . Then, the upper
+(cid:101)i (cid:101)min
+bound becomes:
+K K
+(cid:88) π 1 (cid:88) 1
+i
+≤ π = (A.12)
+xτ xτ i xτ
+i
+(cid:101)i (cid:101)min
+i=1
+(cid:101)min
+37
+
+--- Page 39 ---
+Theorem Appendix A.2. vLet x,π ∈ ∆K−1 and the temperature τ ∈ R+.
+(cid:101)
+Define x the minimum value x can take. The KL divergence between p
+(cid:101)min (cid:101) GS
+defined in Equation 13 and its approximation p in Equation 19 is bounded as
+θ
+follows:
+KL(p ∥p ) <−K(τ +1)logx +(K −1)logτ +(K −1)log[1−x ]
+GS θ (cid:101)min (cid:101)min
++logΓ(K)+Klog[(1−x )/(K −1)!]
+(cid:101)min
+KL(p ∥p ) > Kτ logx +(K −1)logτ +(K −1)log[x ]+logΓ(K)
+GS θ (cid:101)min (cid:101)min
++Klog[x /(K −1)!]
+(cid:101)min
+Proof. We want to bound the KL divergence between
+K
+1 (cid:89)
+p (x|π) = πx (cid:101)i (A.13)
+θ (cid:101)
+Z(π)
+i
+and
+(cid:18)
+(cid:88)
+K
+π
+(cid:19)−K
+(cid:89)
+K
+π
+p(x|π,τ) = Γ(K)τK−1 i i (A.14)
+(cid:101) xτ xτ+1
+i
+(cid:101)i
+i
+(cid:101)i
+where K is the number of classes for the categorical variable and π,x ∈ △K−1.
+(cid:101)
+38
+
+--- Page 40 ---
+Appendix A.0.1. Derivation of the upper bound
+(cid:34) (cid:35)
+(cid:20)
+(cid:89)
+K Z(π)π1−x (cid:101)ix−τ−1(cid:21)
+KL(p(x|π,τ)∥p (x|π)) = E log Γ(K)τK−1 i (cid:101)i (A.15)
+(cid:101) θ (cid:101)
+K
+i=1 (cid:80) π x−τ
+j(cid:101)j
+j
+(cid:34) (cid:35)
+(cid:88)
+K Z(π)π1−x (cid:101)ix−τ−1
+= E logΓ(K)+(K −1)logτ + log i (cid:101)i
+K
+i (cid:80) π x−τ
+j(cid:101)j
+j
+(A.16)
+(cid:34) (cid:35)
+≤ E (K −1)logτ +
+(cid:88) K
+log
+Z(π)(1−x
+(cid:101)min
+)1−x (cid:101)ix
+(cid:101)
+−
+i
+τ−1
++logΓ(K)
+K
+i (cid:80) π x−τ
+j(cid:101)j
+j
+by π1−x (cid:101)i ≤ (1−x )1−x (cid:101)i (A.17)
+i (cid:101)min
+(cid:34) (cid:35)
+≤ E
+(cid:88) K
+log
+[max
+1≤j≤K
+π
+j
+](1−x
+(cid:101)min
+)1−x (cid:101)ix
+(cid:101)
+−
+i
+τ−1
++(K −1)logτ
+K
+i (K −1)! (cid:80) π x−τ
+j(cid:101)j
+j
++logΓ(K) Lebesgue measure of ∆K−1 (A.18)
+(cid:34) (cid:35)
+≤ E
+(cid:88) K
+log
+[max
+1≤j≤K
+π
+j
+](1−x
+(cid:101)min
+)1−x (cid:101)ix
+(cid:101)
+−
+i
+τ−1
++(K −1)logτ +logΓ(K)
+(K −1)!
+i
+by Lemma Appendix A.1 (A.19)
+(cid:34) (cid:35)
+K
+(cid:88)
+= E logx−τ−1 +(K +1)logτ +logΓ(K)+(K −1)log(1−x )
+(cid:101)i (cid:101)min
+i
+1−x
+(cid:101)min
++Klog (A.20)
+(K −1)!
+(cid:34) (cid:35)
+K
+(cid:88)
+= E (−τ −1)logx +(K −1)logτ +logΓ(K)
+(cid:101)i
+i
+1−x
+(cid:101)min
++(K −1)log(1−x )+Klog (A.21)
+(cid:101)min
+(K −1)!
+< −K(τ +1)log(1−x )+(K −1)logτ +logΓ(K)
+(cid:101)min
+39
+1−x
+(cid:101)min
++(K −1)log(1−x )+Klog (A.22)
+(cid:101)min
+(K −1)!
+
+--- Page 41 ---
+Appendix A.0.2. Derivation of the lower bound
+(cid:34) (cid:35)
+(cid:20)
+(cid:89)
+K Z(π)π1−x (cid:101)ix−τ−1(cid:21)
+KL(p(x|π,τ)∥p (x|π)) = E log Γ(K)τK−1 i (cid:101)i (A.23)
+(cid:101) θ (cid:101)
+K
+i=1 (cid:80) π x−τ
+j(cid:101)j
+j
+(cid:34) (cid:35)
+(cid:88)
+K Z(π)π1−x (cid:101)ix−τ−1
+= E logΓ(K)+(K −1)logτ + log i (cid:101)i
+K
+i (cid:80) π x−τ
+j(cid:101)j
+j
+(A.24)
+(cid:34) (cid:35)
+(cid:88)
+K Z(π)π1−x (cid:101)ix−τ−1
+≥ E logΓ(K)+(K −1)logτ + log i (cid:101)i
+x−τ
+i
+(cid:101)min
+by Lemma Appendix A.1 (A.25)
+(cid:34) (cid:35)
+(cid:88)
+K Z(π)π1−x (cid:101)ix−τ−1
+= E (K −1)logτ + log i (cid:101)i +logΓ(K)
+x−τ
+i
+(cid:101)min
+(A.26)
+(cid:34) (cid:35)
+(cid:88) K x π1−x (cid:101)ix−τ−1
+> E (K −1)logτ + log (cid:101)min i (cid:101)i +logΓ(K)
+(K −1)!x−τ
+i
+(cid:101)min
+by Lebesgue measure of ∆K−1 (A.27)
+(cid:34) (cid:35)
+K
+(cid:88)
+> E (K −1)logτ + (−τ −1)(logx −logx ) +logΓ(K)
+(cid:101)i (cid:101)min
+i
+1
++Klog +(K −1)logx (A.28)
+(cid:101)min
+(K −1)!
+(cid:34) (cid:35)
+K
+(cid:88)
+= E (K −1)logτ + (τ +1)(logx −logx ) +logΓ(K)
+(cid:101)min (cid:101)i
+i
+1
++Klog +(K −1)logx (A.29)
+(cid:101)min
+(K −1)!
+> (K −1)logτ +K(τ +1)logx +logΓ(K)
+(cid:101)min
+1
++Klog +(K −1)logx (A.30)
+(cid:101)min
+(K −1)!
+40
+
+--- Page 42 ---
+41

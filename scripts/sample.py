@@ -73,9 +73,13 @@ def sample(
     num_numerical_features_ = D.X_num['train'].shape[1] if D.X_num is not None else 0
     d_in = np.sum(K) + num_numerical_features_
     model_params['d_in'] = int(d_in)
+    
+    # 移除分类器专用参数（这些参数不应该传递给扩散模型）
+    model_params_clean = {k: v for k, v in model_params.items() if k != 'classifier_model_type'}
+    
     model = get_model(
         model_type,
-        model_params,
+        model_params_clean,
         num_numerical_features_,
         category_sizes=D.get_category_sizes('train')
     )

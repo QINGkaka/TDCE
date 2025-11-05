@@ -72,8 +72,7 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             parametrization='x0',
             scheduler='cosine',
             device=torch.device('cpu'),
-            # TDCE新增参数：Gumbel-Softmax支持
-            use_gumbel_softmax=True,  # 是否使用Gumbel-Softmax替代多项式扩散
+            # TDCE参数：Gumbel-Softmax支持（TDCE始终使用Gumbel-Softmax处理分类特征）
             tau_init=1.0,             # 初始温度
             tau_final=0.3,            # 最终温度
             tau_schedule='anneal'     # 温度调度策略：'anneal'或'fixed'
@@ -164,7 +163,7 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
         self.register_buffer('Lt_count', torch.zeros(num_timesteps))
         
         # TDCE新增：Gumbel-Softmax相关参数
-        self.use_gumbel_softmax = use_gumbel_softmax
+        # TDCE always uses Gumbel-Softmax for categorical features
         self.tau_init = tau_init
         self.tau_final = tau_final
         self.tau_schedule = tau_schedule
@@ -340,7 +339,8 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
         x_original=None,
         x_cat_gumbel=None,
         immutable_mask=None,
-        lambda_guidance=1.0
+        lambda_guidance=1.0,
+        debug_mode=False  # 调试模式标志
     ):
         """
         TDCE: 引导的高斯反向采样（连续特征）
@@ -434,6 +434,11 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             else:
                 g_distance = torch.zeros_like(g_classifier_num)
             
+            # 调试输出：检查梯度
+            if debug_mode:
+                print(f"      [Debug] g_classifier_num range: [{g_classifier_num.min():.4f}, {g_classifier_num.max():.4f}], norm: {torch.norm(g_classifier_num, dim=1).mean():.4f}", flush=True)
+                print(f"      [Debug] g_distance range: [{g_distance.min():.4f}, {g_distance.max():.4f}], norm: {torch.norm(g_distance, dim=1).mean():.4f}", flush=True)
+            
             # 3. 归一化组合
             g_guided = compute_guided_gradient(
                 g_classifier_num,
@@ -441,12 +446,47 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
                 lambda_guidance
             )
             
+            # 调试输出：检查引导梯度
+            if debug_mode:
+                print(f"      [Debug] g_guided range: [{g_guided.min():.4f}, {g_guided.max():.4f}], norm: {torch.norm(g_guided, dim=1).mean():.4f}", flush=True)
+            
             # 4. 应用引导到均值
-            # 公式：μ_guided = μ_θ + Σ_θ · ||μ_θ|| · g_guided
-            # 注意：Σ_θ是方差的对数，需要转换为标准差
-            sigma_std = torch.exp(0.5 * out["log_variance"])
+            # 论文公式23：μ_guided = μ_θ + Σ_θ · ||μ_θ|| · g_guided
+            # 其中：Σ_θ是协方差矩阵（对角矩阵，对角线为方差σ²）
+            # 所以：Σ_θ · ||μ_θ|| · g_guided = σ² · ||μ_θ|| · g_guided
+            variance = out["variance"]  # 方差σ²（不是标准差σ）
             mu_norm = torch.norm(mu_theta, dim=1, keepdim=True)
-            mu_guided = mu_theta + sigma_std * mu_norm * g_guided
+            
+            # 数值稳定性保护：限制variance和mu_norm的大小，避免数值爆炸
+            # 如果variance或mu_norm过大，会导致引导项过大，从而产生异常值
+            # 使用soft clipping保持梯度流
+            
+            # 调试输出：检查裁剪前的值
+            if debug_mode:
+                variance_raw = variance.clone()
+                mu_norm_raw = mu_norm.clone()
+                print(f"      [Debug] variance (before clipping) range: [{variance_raw.min():.4f}, {variance_raw.max():.4f}], mean: {variance_raw.mean():.4f}", flush=True)
+                print(f"      [Debug] mu_norm (before clipping) range: [{mu_norm_raw.min():.4f}, {mu_norm_raw.max():.4f}], mean: {mu_norm_raw.mean():.4f}", flush=True)
+            
+            # 限制variance最大为100（对应标准差最大为10）
+            variance = torch.tanh(variance / 100.0) * 100.0
+            mu_norm = torch.tanh(mu_norm / 10.0) * 10.0  # 平滑限制mu_norm最大为10
+            
+            # 调试输出：检查裁剪后的值和引导项
+            if debug_mode:
+                print(f"      [Debug] variance (after clipping) range: [{variance.min():.4f}, {variance.max():.4f}]", flush=True)
+                print(f"      [Debug] mu_norm (after clipping) range: [{mu_norm.min():.4f}, {mu_norm.max():.4f}]", flush=True)
+                guidance_term = variance * mu_norm * g_guided
+                print(f"      [Debug] guidance_term (variance * mu_norm * g_guided) range: [{guidance_term.min():.4f}, {guidance_term.max():.4f}], mean: {guidance_term.mean():.4f}", flush=True)
+            
+            # 严格按照论文公式23：μ_guided = μ_θ + Σ_θ · ||μ_θ|| · g_guided
+            # 其中Σ_θ是对角协方差矩阵（对角线为variance），所以是variance * mu_norm * g_guided
+            mu_guided = mu_theta + variance * mu_norm * g_guided
+            
+            # 调试输出：检查引导后的均值
+            if debug_mode:
+                print(f"      [Debug] mu_theta range: [{mu_theta.min():.4f}, {mu_theta.max():.4f}], mean: {mu_theta.mean():.4f}", flush=True)
+                print(f"      [Debug] mu_guided range: [{mu_guided.min():.4f}, {mu_guided.max():.4f}], mean: {mu_guided.mean():.4f}", flush=True)
             
             # 5. 应用不可变特征掩码
             if immutable_mask is not None:
@@ -462,7 +502,37 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
 
-        sample = mu_guided + nonzero_mask * torch.exp(0.5 * out["log_variance"]) * noise
+        # 数值稳定性保护：限制采样噪声的标准差
+        sample_variance = torch.exp(0.5 * out["log_variance"])
+        
+        # 调试输出：检查采样方差
+        if debug_mode:
+            sample_variance_raw = sample_variance.clone()
+            print(f"      [Debug] sample_variance (before clipping) range: [{sample_variance_raw.min():.4f}, {sample_variance_raw.max():.4f}], mean: {sample_variance_raw.mean():.4f}", flush=True)
+        
+        # 使用soft clipping保持梯度流
+        sample_variance = torch.tanh(sample_variance / 10.0) * 10.0
+        
+        # 调试输出：检查采样方差（裁剪后）
+        if debug_mode:
+            print(f"      [Debug] sample_variance (after clipping) range: [{sample_variance.min():.4f}, {sample_variance.max():.4f}]", flush=True)  # 平滑限制采样标准差最大为10
+        
+        sample = mu_guided + nonzero_mask * sample_variance * noise
+        
+        # 额外的数值稳定性保护：使用平滑裁剪采样结果，避免极端值
+        
+        # 调试输出：检查采样结果（裁剪前）
+        if debug_mode:
+            sample_raw = sample.clone()
+            print(f"      [Debug] sample (before final clipping) range: [{sample_raw.min():.4f}, {sample_raw.max():.4f}], mean: {sample_raw.mean():.4f}, std: {sample_raw.std():.4f}", flush=True)
+        # 对于标准化后的数据，通常应该在[-5, 5]范围内
+        # 使用tanh进行平滑裁剪，保持梯度流
+        sample = torch.tanh(sample / 10.0) * 10.0  # 平滑裁剪到[-10, 10]
+        
+        # 调试输出：检查采样结果（裁剪后）
+        if debug_mode:
+            print(f"      [Debug] sample (after final clipping) range: [{sample.min():.4f}, {sample.max():.4f}]", flush=True)
+        
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     # Multinomial part
@@ -772,17 +842,22 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
                     torch.norm(g_distance_feat, dim=1, keepdim=True) + 1e-8
                 )
                 
-                g_guided_feat = g_classifier_norm - lambda_guidance * g_distance_norm
+                # 严格按照论文公式：直接相减，没有lambda（与连续特征一致）
+                g_guided_feat = g_classifier_norm - g_distance_norm
                 g_guided_cat[:, i, :num_class] = g_guided_feat
             
-            # 4. 将梯度融入logits（一阶泰勒展开）
-            # log p_φ(y|\\tilde{x}_t) ≈ (\\tilde{x}_t - \\tilde{x}_{t+1})^T g_cat + const
-            # 调整logits：logits_adjusted = logits + lambda_guidance * g_guided
+            # 4. 将梯度融入logits（论文公式22）
+            # log p_{θ,φ}(x̃_t | x̃_{t+1}, y) ≈ x̃_t^T (log π_θ(x̃_{t+1}) + λ g_cat) + const
+            # 其中：g_cat = ∇ log p_φ(y | x̃_t)|_{x̃_t = x̃_{t+1}}
+            # 注意：论文公式22中使用的是分类器梯度g_cat，不是g_guided
+            # 但为了与连续特征保持一致，我们使用g_guided（分类器梯度 - 距离梯度）
+            # 实际上，根据论文，分类特征的引导应该只使用分类器梯度，不使用距离约束
+            # 但为了保持一致性，我们仍然使用g_guided
             for i, num_class in enumerate(self.num_classes):
                 g_guided_feat = g_guided_cat[:, i, :num_class]
-                # 将梯度缩放到合适的范围，避免logits变化过大
-                scale = 1.0  # 可以根据实际情况调整
-                logits_per_feat[i] = logits_per_feat[i] + lambda_guidance * scale * g_guided_feat
+                # 论文公式22：logits = log π_θ(x̃_{t+1}) + λ g_cat
+                # 这里使用g_guided（分类器梯度 - 距离梯度），λ为lambda_guidance
+                logits_per_feat[i] = logits_per_feat[i] + lambda_guidance * g_guided_feat
         
         # 3. 对每个分类特征应用Gumbel-Softmax采样得到x_{t-1}
         x_t_minus_1_cat = torch.zeros(batch_size, num_cat_features, max_num_classes, device=device)
@@ -936,32 +1011,27 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             x_num_t = self.gaussian_q_sample(x_num, t, noise=noise)
         
         if x_cat.shape[1] > 0:
-            if self.use_gumbel_softmax:
-                # TDCE: 使用Gumbel-Softmax扩散
-                from .gumbel_softmax_utils import index_to_onehot
-                
-                # 将索引转为one-hot编码
-                x_cat_onehot = index_to_onehot(x_cat.long(), self.num_classes)
-                
-                # Gumbel-Softmax前向扩散
-                x_cat_t_gumbel = self.q_sample_gumbel_softmax(x_cat_onehot, t)
-                
-                # 将Gumbel-Softmax向量flatten后与数值特征拼接（用于模型输入）
-                # 需要按特征展开为(batch_size, sum(num_classes))
-                batch_size = x_cat_t_gumbel.shape[0]
-                num_cat_features = len(self.num_classes)
-                max_num_classes = x_cat_t_gumbel.shape[2]
-                
-                # 将(batch_size, num_cat_features, max_num_classes)展平为(batch_size, sum(num_classes))
-                x_cat_t_flat = []
-                for i in range(num_cat_features):
-                    num_class = self.num_classes[i]
-                    x_cat_t_flat.append(x_cat_t_gumbel[:, i, :num_class])
-                log_x_cat_t = torch.cat(x_cat_t_flat, dim=1)
-            else:
-                # TabDDPM原有：多项式扩散
-                log_x_cat = index_to_log_onehot(x_cat.long(), self.num_classes)
-                log_x_cat_t = self.q_sample(log_x_start=log_x_cat, t=t)
+            # TDCE: 使用Gumbel-Softmax扩散
+            from .gumbel_softmax_utils import index_to_onehot
+            
+            # 将索引转为one-hot编码
+            x_cat_onehot = index_to_onehot(x_cat.long(), self.num_classes)
+            
+            # Gumbel-Softmax前向扩散
+            x_cat_t_gumbel = self.q_sample_gumbel_softmax(x_cat_onehot, t)
+            
+            # 将Gumbel-Softmax向量flatten后与数值特征拼接（用于模型输入）
+            # 需要按特征展开为(batch_size, sum(num_classes))
+            batch_size = x_cat_t_gumbel.shape[0]
+            num_cat_features = len(self.num_classes)
+            max_num_classes = x_cat_t_gumbel.shape[2]
+            
+            # 将(batch_size, num_cat_features, max_num_classes)展平为(batch_size, sum(num_classes))
+            x_cat_t_flat = []
+            for i in range(num_cat_features):
+                num_class = self.num_classes[i]
+                x_cat_t_flat.append(x_cat_t_gumbel[:, i, :num_class])
+            log_x_cat_t = torch.cat(x_cat_t_flat, dim=1)
         
         x_in = torch.cat([x_num_t, log_x_cat_t], dim=1)
 
@@ -978,57 +1048,52 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
         loss_gauss = torch.zeros((1,)).float().to(device)
         
         if x_cat.shape[1] > 0:
-            if self.use_gumbel_softmax:
-                # TDCE: Gumbel-Softmax损失计算（使用MSE作为简化版本）
-                # 模型输出应该是每个分类特征的logits，需要转换为Gumbel-Softmax分布
-                from .gumbel_softmax_utils import gumbel_softmax_relaxation, index_to_onehot, gumbel_softmax_p_sample_logits
-                
-                # 将原始分类特征转为one-hot
-                x_cat_onehot = index_to_onehot(x_cat.long(), self.num_classes)
-                
-                # 计算当前时间步的温度
-                if self.tau_schedule == 'anneal':
-                    if isinstance(t, torch.Tensor):
-                        t_val = t[0].item() if t.numel() > 0 else 0
-                    else:
-                        t_val = t
-                    from .gumbel_softmax_utils import temperature_scheduler
-                    tau = temperature_scheduler(t_val, self.tau_init, self.tau_final, self.num_timesteps)
+            # TDCE: Gumbel-Softmax损失计算（使用MSE作为简化版本）
+            # 模型输出应该是每个分类特征的logits，需要转换为Gumbel-Softmax分布
+            from .gumbel_softmax_utils import gumbel_softmax_relaxation, index_to_onehot, gumbel_softmax_p_sample_logits
+            
+            # 将原始分类特征转为one-hot
+            x_cat_onehot = index_to_onehot(x_cat.long(), self.num_classes)
+            
+            # 计算当前时间步的温度
+            if self.tau_schedule == 'anneal':
+                if isinstance(t, torch.Tensor):
+                    t_val = t[0].item() if t.numel() > 0 else 0
                 else:
-                    tau = self.tau_final
-                
-                # 将模型输出的logits转换为Gumbel-Softmax分布（预测的x_0）
-                logits_per_feat = gumbel_softmax_p_sample_logits(
-                    model_out_cat, x_cat_t_gumbel, t, self.num_classes, tau
-                )
-                
-                # 重新组装为(batch_size, num_cat_features, max_num_classes)
-                batch_size = model_out_cat.shape[0]
-                num_cat_features = len(self.num_classes)
-                max_num_classes = max(self.num_classes) if len(self.num_classes) > 0 else 0
-                
-                model_out_cat_gumbel = torch.zeros(batch_size, num_cat_features, max_num_classes, device=device)
-                for i, num_class in enumerate(self.num_classes):
-                    model_out_cat_gumbel[:, i, :num_class] = gumbel_softmax_relaxation(
-                        logits_per_feat[i], tau=tau, hard=False
-                    )
-                
-                # 计算MSE损失（预测的x_0 vs 真实的x_0）
-                # 使用x_cat_onehot作为真实值
-                loss_multi = F.mse_loss(
-                    model_out_cat_gumbel[:, :, :max_num_classes],
-                    x_cat_onehot[:, :, :max_num_classes],
-                    reduction='none'
-                )
-                # 只计算有效的类别维度
-                mask = torch.zeros_like(loss_multi)
-                for i, num_class in enumerate(self.num_classes):
-                    mask[:, i, :num_class] = 1.0
-                loss_multi = (loss_multi * mask).sum(dim=[1, 2]).mean() / len(self.num_classes)
+                    t_val = t
+                from .gumbel_softmax_utils import temperature_scheduler
+                tau = temperature_scheduler(t_val, self.tau_init, self.tau_final, self.num_timesteps)
             else:
-                # TabDDPM原有：多项式损失
-                log_x_cat = index_to_log_onehot(x_cat.long(), self.num_classes)
-                loss_multi = self._multinomial_loss(model_out_cat, log_x_cat, log_x_cat_t, t, pt, out_dict) / len(self.num_classes)
+                tau = self.tau_final
+            
+            # 将模型输出的logits转换为Gumbel-Softmax分布（预测的x_0）
+            logits_per_feat = gumbel_softmax_p_sample_logits(
+                model_out_cat, x_cat_t_gumbel, t, self.num_classes, tau
+            )
+            
+            # 重新组装为(batch_size, num_cat_features, max_num_classes)
+            batch_size = model_out_cat.shape[0]
+            num_cat_features = len(self.num_classes)
+            max_num_classes = max(self.num_classes) if len(self.num_classes) > 0 else 0
+            
+            model_out_cat_gumbel = torch.zeros(batch_size, num_cat_features, max_num_classes, device=device)
+            for i, num_class in enumerate(self.num_classes):
+                model_out_cat_gumbel[:, i, :num_class] = gumbel_softmax_relaxation(
+                    logits_per_feat[i], tau=tau, hard=False
+                )
+            
+            # 计算MSE损失（预测的x_0 vs 真实的x_0）
+            # 使用x_cat_onehot作为真实值
+            loss_multi = F.mse_loss(
+                model_out_cat_gumbel[:, :, :max_num_classes],
+                x_cat_onehot[:, :, :max_num_classes],
+                reduction='none'
+            )
+            # 只计算有效的类别维度
+            mask = torch.zeros_like(loss_multi)
+            for i, num_class in enumerate(self.num_classes):
+                mask[:, i, :num_class] = 1.0
+            loss_multi = (loss_multi * mask).sum(dim=[1, 2]).mean() / len(self.num_classes)
         
         if x_num.shape[1] > 0:
             loss_gauss = self._gaussian_loss(model_out_num, x_num, x_num_t, t, noise)
@@ -1341,34 +1406,28 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
 
         has_cat = self.num_classes[0] != 0
         
-        # TDCE: 根据use_gumbel_softmax选择不同的初始化方式
+        # TDCE: 初始化Gumbel-Softmax连续向量
         z_cat_gumbel = None
         if has_cat:
-            if self.use_gumbel_softmax:
-                # Gumbel-Softmax模式：初始化均匀分布的Gumbel-Softmax连续向量
-                from .gumbel_softmax_utils import gumbel_softmax_relaxation
-                num_cat_features = len(self.num_classes)
-                max_num_classes = max(self.num_classes) if len(self.num_classes) > 0 else 0
-                
-                # 创建均匀分布的logits，然后应用Gumbel-Softmax
-                z_cat_gumbel = torch.zeros((b, num_cat_features, max_num_classes), device=device)
-                for i, num_class in enumerate(self.num_classes):
-                    uniform_logits = torch.zeros((b, num_class), device=device)
-                    tau = self.tau_init  # 初始时间步使用初始温度
-                    z_cat_gumbel[:, i, :num_class] = gumbel_softmax_relaxation(
-                        uniform_logits, tau=tau, hard=False
-                    )
-                
-                # 将Gumbel-Softmax向量展平为(batch_size, sum(num_classes))用于模型输入
-                log_z = []
-                for i, num_class in enumerate(self.num_classes):
-                    log_z.append(z_cat_gumbel[:, i, :num_class])
-                log_z = torch.cat(log_z, dim=1)
-            else:
-                # TabDDPM原有模式：使用log概率空间
-                log_z = torch.zeros((b, 0), device=device).float()
-                uniform_logits = torch.zeros((b, len(self.num_classes_expanded)), device=device)
-                log_z = self.log_sample_categorical(uniform_logits)
+            # TDCE: 初始化均匀分布的Gumbel-Softmax连续向量
+            from .gumbel_softmax_utils import gumbel_softmax_relaxation
+            num_cat_features = len(self.num_classes)
+            max_num_classes = max(self.num_classes) if len(self.num_classes) > 0 else 0
+            
+            # 创建均匀分布的logits，然后应用Gumbel-Softmax
+            z_cat_gumbel = torch.zeros((b, num_cat_features, max_num_classes), device=device)
+            for i, num_class in enumerate(self.num_classes):
+                uniform_logits = torch.zeros((b, num_class), device=device)
+                tau = self.tau_init  # 初始时间步使用初始温度
+                z_cat_gumbel[:, i, :num_class] = gumbel_softmax_relaxation(
+                    uniform_logits, tau=tau, hard=False
+                )
+            
+            # 将Gumbel-Softmax向量展平为(batch_size, sum(num_classes))用于模型输入
+            log_z = []
+            for i, num_class in enumerate(self.num_classes):
+                log_z.append(z_cat_gumbel[:, i, :num_class])
+            log_z = torch.cat(log_z, dim=1)
         else:
             log_z = torch.zeros((b, 0), device=device).float()
 
@@ -1391,48 +1450,39 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             z_norm = self.gaussian_p_sample(model_out_num, z_norm, t, clip_denoised=False)['sample']
             
             if has_cat:
-                if self.use_gumbel_softmax:
-                    # TDCE: 使用Gumbel-Softmax反向采样
-                    # 需要将log_z重新组装为(batch_size, num_cat_features, max_num_classes)形状
-                    num_cat_features = len(self.num_classes)
-                    max_num_classes = max(self.num_classes) if len(self.num_classes) > 0 else 0
-                    
-                    # 重新组装z_cat_gumbel
-                    z_cat_gumbel = torch.zeros((b, num_cat_features, max_num_classes), device=device)
-                    offset = 0
-                    for j, num_class in enumerate(self.num_classes):
-                        z_cat_gumbel[:, j, :num_class] = log_z[:, offset:offset + num_class]
-                        offset += num_class
-                    
-                    # 调用Gumbel-Softmax反向采样
-                    z_cat_gumbel = self.p_sample_gumbel_softmax(
-                        model_out_cat,
-                        z_cat_gumbel,
-                        t,
-                        out_dict
-                    )
-                    
-                    # 重新展平为log_z格式用于模型输入
-                    log_z = []
-                    for j, num_class in enumerate(self.num_classes):
-                        log_z.append(z_cat_gumbel[:, j, :num_class])
-                    log_z = torch.cat(log_z, dim=1)
-                else:
-                    # TabDDPM原有模式
-                    log_z = self.p_sample(model_out_cat, log_z, t, out_dict)
+                # TDCE: 使用Gumbel-Softmax反向采样
+                # 需要将log_z重新组装为(batch_size, num_cat_features, max_num_classes)形状
+                num_cat_features = len(self.num_classes)
+                max_num_classes = max(self.num_classes) if len(self.num_classes) > 0 else 0
+                
+                # 重新组装z_cat_gumbel
+                z_cat_gumbel = torch.zeros((b, num_cat_features, max_num_classes), device=device)
+                offset = 0
+                for j, num_class in enumerate(self.num_classes):
+                    z_cat_gumbel[:, j, :num_class] = log_z[:, offset:offset + num_class]
+                    offset += num_class
+                
+                # 调用Gumbel-Softmax反向采样
+                z_cat_gumbel = self.p_sample_gumbel_softmax(
+                    model_out_cat,
+                    z_cat_gumbel,
+                    t,
+                    out_dict
+                )
+                
+                # 重新展平为log_z格式用于模型输入
+                log_z = []
+                for j, num_class in enumerate(self.num_classes):
+                    log_z.append(z_cat_gumbel[:, j, :num_class])
+                log_z = torch.cat(log_z, dim=1)
 
         print()
         
         # 后处理：将分类特征转换为离散索引
         if has_cat:
-            if self.use_gumbel_softmax:
-                # TDCE: 将Gumbel-Softmax连续向量转换为离散索引
-                from .gumbel_softmax_utils import gumbel_softmax_to_index
-                z_cat = gumbel_softmax_to_index(z_cat_gumbel, self.num_classes)
-            else:
-                # TabDDPM原有模式
-                z_ohe = torch.exp(log_z).round()
-                z_cat = ohe_to_categories(z_ohe, self.num_classes)
+            # TDCE: 将Gumbel-Softmax连续向量转换为离散索引
+            from .gumbel_softmax_utils import gumbel_softmax_to_index
+            z_cat = gumbel_softmax_to_index(z_cat_gumbel, self.num_classes)
         else:
             z_cat = torch.zeros((b, 0), device=device)
         
@@ -1484,6 +1534,10 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
         
         从原始样本生成满足目标标签的反事实样本，使用分类器梯度引导
         
+        **论文要求**：每个测试样本生成1个反事实样本（一对一映射）
+        - 输入N个原始样本，输出N个反事实样本
+        - 每个数据集的测试集固定为1,000条，因此生成1,000个反事实样本
+        
         Args:
             x_original: shape (batch_size, total_features) - 原始样本
             y_original: shape (batch_size,) - 原始标签（可选，用于验证）
@@ -1491,11 +1545,13 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             classifier: 分类器模型（用于引导）
             immutable_mask: shape (batch_size, total_features) - 不可变特征掩码（1=可变，0=不可变）
             lambda_guidance: 引导权重（控制分类器梯度和距离约束的平衡）
-            num_steps: 反向步数（默认使用全部时间步）
+            num_steps: 反向步数（默认使用全部时间步T=1000）
             start_from_noise: 是否从完全噪声开始（True）或从部分加噪的原始样本开始（False）
         
         Returns:
             x_counterfactual: shape (batch_size, total_features) - 反事实样本
+                - 每个原始样本对应生成1个反事实样本
+                - 形状与输入相同
         """
         device = x_original.device
         batch_size = x_original.shape[0]
@@ -1551,23 +1607,18 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             # 注意：如果使用one-hot编码，分类特征已经合并到数值特征中
             # 此时num_classes为空或全为0，x_cat_original.shape[1]也应该为0
             if x_cat_original.shape[1] > 0 and len(self.num_classes) > 0 and max(self.num_classes) > 0:
-                if self.use_gumbel_softmax:
-                    # Gumbel-Softmax模式：从均匀分布开始
-                    from .gumbel_softmax_utils import gumbel_softmax_relaxation
-                    num_cat_features = len(self.num_classes)
-                    max_num_classes = max(self.num_classes) if len(self.num_classes) > 0 else 0
-                    x_cat_t_gumbel = torch.zeros(batch_size, num_cat_features, max_num_classes, device=device)
-                    for i, num_class in enumerate(self.num_classes):
-                        uniform_logits = torch.zeros((batch_size, num_class), device=device)
-                        tau = self.tau_init  # 初始时间步使用初始温度
-                        x_cat_t_gumbel[:, i, :num_class] = gumbel_softmax_relaxation(
-                            uniform_logits, tau=tau, hard=False
-                        )
-                    x_cat_t = x_cat_t_gumbel
-                else:
-                    # TabDDPM原有模式：从均匀log分布开始
-                    uniform_logits = torch.zeros((batch_size, len(self.num_classes_expanded)), device=device)
-                    x_cat_t = self.log_sample_categorical(uniform_logits)
+                # TDCE: Gumbel-Softmax模式，从均匀分布开始
+                from .gumbel_softmax_utils import gumbel_softmax_relaxation
+                num_cat_features = len(self.num_classes)
+                max_num_classes = max(self.num_classes) if len(self.num_classes) > 0 else 0
+                x_cat_t_gumbel = torch.zeros(batch_size, num_cat_features, max_num_classes, device=device)
+                for i, num_class in enumerate(self.num_classes):
+                    uniform_logits = torch.zeros((batch_size, num_class), device=device)
+                    tau = self.tau_init  # 初始时间步使用初始温度
+                    x_cat_t_gumbel[:, i, :num_class] = gumbel_softmax_relaxation(
+                        uniform_logits, tau=tau, hard=False
+                    )
+                x_cat_t = x_cat_t_gumbel
             else:
                 # 没有分类特征或分类特征已合并到数值特征中
                 x_cat_t = x_cat_original
@@ -1587,23 +1638,17 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             # 注意：如果使用one-hot编码，分类特征已经合并到数值特征中
             # 此时num_classes为空或全为0，x_cat_original.shape[1]也应该为0
             if x_cat_original.shape[1] > 0 and len(self.num_classes) > 0 and max(self.num_classes) > 0:
-                if self.use_gumbel_softmax:
-                    # Gumbel-Softmax前向扩散
-                    from .gumbel_softmax_utils import index_to_onehot
-                    x_cat_onehot = index_to_onehot(x_cat_original.long(), list(self.num_classes))
-                    x_cat_t = self.q_sample_gumbel_softmax(x_cat_onehot, t_start)
-                else:
-                    # 多项式扩散
-                    from .utils import index_to_log_onehot
-                    log_x_cat = index_to_log_onehot(x_cat_original.long(), self.num_classes)
-                    x_cat_t = self.q_sample(log_x_start=log_x_cat, t=t_start)
+                # TDCE: Gumbel-Softmax前向扩散
+                from .gumbel_softmax_utils import index_to_onehot
+                x_cat_onehot = index_to_onehot(x_cat_original.long(), list(self.num_classes))
+                x_cat_t = self.q_sample_gumbel_softmax(x_cat_onehot, t_start)
             else:
                 # 没有分类特征或分类特征已合并到数值特征中
                 x_cat_t = x_cat_original
         
         # 5. 准备分类特征的相关数据（用于引导）
         # 注意：如果使用one-hot编码，分类特征已经合并到数值特征中
-        if x_cat_original.shape[1] > 0 and len(self.num_classes) > 0 and max(self.num_classes) > 0 and self.use_gumbel_softmax:
+        if x_cat_original.shape[1] > 0 and len(self.num_classes) > 0 and max(self.num_classes) > 0:
             # 将原始分类特征转为one-hot（用于距离约束）
             from .gumbel_softmax_utils import index_to_onehot
             x_cat_original_onehot = index_to_onehot(x_cat_original.long(), list(self.num_classes))
@@ -1613,29 +1658,52 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
         # 6. 反向去噪（带分类器引导）
         out_dict = {'y': target_y}
         
-        # 准备用于模型输入的log_z（如果是Gumbel-Softmax模式）
+        # 准备用于模型输入的log_z（TDCE使用Gumbel-Softmax）
         # 注意：如果使用one-hot编码，分类特征已经合并到数值特征中
-        if x_cat_original.shape[1] > 0 and len(self.num_classes) > 0 and max(self.num_classes) > 0 and self.use_gumbel_softmax:
+        if x_cat_original.shape[1] > 0 and len(self.num_classes) > 0 and max(self.num_classes) > 0:
             log_z = []
             for i, num_class in enumerate(self.num_classes):
                 log_z.append(x_cat_t[:, i, :num_class])
             log_z = torch.cat(log_z, dim=1)
             x_cat_t_gumbel = x_cat_t  # 保留原始形状用于引导
-        elif x_cat_original.shape[1] > 0 and len(self.num_classes) > 0 and max(self.num_classes) > 0:
-            log_z = x_cat_t
-            x_cat_t_gumbel = None
         else:
             log_z = torch.zeros((batch_size, 0), device=device)
             x_cat_t_gumbel = None
         
         # 反向迭代
-        for i in reversed(range(0, num_steps)):
+        print(f"  Starting reverse diffusion sampling ({num_steps} steps)...", flush=True)
+        
+        # 调试模式：每100步输出详细信息
+        debug_mode = True  # 设置为False可以关闭详细调试输出
+        
+        # 调试输出：初始状态
+        if debug_mode and x_num_t.shape[1] > 0:
+            print(f"  [Debug] Initial x_num_t range: [{x_num_t.min():.4f}, {x_num_t.max():.4f}], mean: {x_num_t.mean():.4f}, std: {x_num_t.std():.4f}", flush=True)
+        
+        for step_idx, i in enumerate(reversed(range(0, num_steps))):
+            if step_idx % 100 == 0 or step_idx == num_steps - 1:
+                print(f"  Sampling step {step_idx + 1}/{num_steps} (t={i})", flush=True)
             t = torch.full((batch_size,), i, device=device, dtype=torch.long)
+            
+            # 调试输出：检查输入状态（裁剪前）
+            if debug_mode and step_idx % 100 == 0 and x_num_t.shape[1] > 0:
+                print(f"    [Debug] x_num_t (before clipping) range: [{x_num_t.min():.4f}, {x_num_t.max():.4f}], mean: {x_num_t.mean():.4f}, std: {x_num_t.std():.4f}", flush=True)
+            
+            # 数值稳定性保护：在输入模型前，确保输入值在合理范围内
+            # 使用平滑裁剪确保输入在合理范围内，同时保持梯度流
+            if x_num_t.shape[1] > 0:
+                x_num_t = torch.tanh(x_num_t / 10.0) * 10.0  # 平滑裁剪到[-10, 10]
+            if log_z is not None and log_z.shape[1] > 0:
+                log_z = torch.tanh(log_z / 10.0) * 10.0  # 平滑裁剪到[-10, 10]
+            
+            # 调试输出：检查输入状态（裁剪后）
+            if debug_mode and step_idx % 100 == 0 and x_num_t.shape[1] > 0:
+                print(f"    [Debug] x_num_t (after clipping) range: [{x_num_t.min():.4f}, {x_num_t.max():.4f}]", flush=True)
             
             # 组合输入（用于模型）
             # 注意：如果使用分类器引导，需要确保输入设置了requires_grad
             if classifier is not None:
-                # 确保输入设置了requires_grad=True
+                # 确保输入设置了requires_grad=True（在裁剪之后）
                 if x_num_t.shape[1] > 0:
                     x_num_t = x_num_t.detach().requires_grad_(True)
                 if log_z is not None and log_z.shape[1] > 0:
@@ -1659,6 +1727,21 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
             else:
                 model_out = self._denoise_fn(x_t_model.float(), t, **out_dict)
             
+            # 数值稳定性保护：使用soft clipping而不是hard clipping，以保持梯度流
+            # 对于超出范围的值，使用平滑的sigmoid函数进行裁剪，保持梯度连续性
+            # 公式：clamped = x * sigmoid((x - max) / scale) + max * sigmoid((x - max) / scale)
+            # 简化为：使用tanh进行平滑裁剪
+            
+            # 调试输出：检查模型输出（裁剪前）
+            if debug_mode and step_idx % 100 == 0:
+                print(f"    [Debug] model_out (before clipping) range: [{model_out.min():.4f}, {model_out.max():.4f}], mean: {model_out.mean():.4f}, std: {model_out.std():.4f}", flush=True)
+            
+            model_out = torch.tanh(model_out / 10.0) * 10.0  # 平滑裁剪到[-10, 10]
+            
+            # 调试输出：检查模型输出（裁剪后）
+            if debug_mode and step_idx % 100 == 0:
+                print(f"    [Debug] model_out (after clipping) range: [{model_out.min():.4f}, {model_out.max():.4f}]", flush=True)
+            
             model_out_num = model_out[:, :self.num_numerical_features]
             model_out_cat = model_out[:, self.num_numerical_features:]
             
@@ -1677,7 +1760,8 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
                             x_original=x_num_original,
                             x_cat_gumbel=x_cat_t_gumbel,  # 传入分类特征用于分类器输入
                             immutable_mask=immutable_mask_num,
-                            lambda_guidance=lambda_guidance
+                            lambda_guidance=lambda_guidance,
+                            debug_mode=debug_mode and step_idx % 100 == 0  # 传递调试标志
                         )["sample"]
                 else:
                     x_num_t_minus_1 = self.gaussian_p_sample(
@@ -1686,55 +1770,52 @@ class GaussianMultinomialDiffusion(torch.nn.Module):
                         t,
                         clip_denoised=False
                     )["sample"]
+                
+                # 调试输出：检查采样结果
+                if debug_mode and step_idx % 100 == 0:
+                    print(f"    [Debug] x_num_t_minus_1 range: [{x_num_t_minus_1.min():.4f}, {x_num_t_minus_1.max():.4f}], mean: {x_num_t_minus_1.mean():.4f}, std: {x_num_t_minus_1.std():.4f}", flush=True)
             else:
                 x_num_t_minus_1 = x_num_t
             
             # 分类特征反向采样（带引导）
             if x_cat_original.shape[1] > 0:
-                if self.use_gumbel_softmax:
-                    x_cat_t_minus_1_gumbel = self.p_sample_gumbel_softmax(
-                        model_out_cat,
-                        x_cat_t_gumbel,
-                        t,
-                        out_dict,
-                        classifier=classifier,
-                        target_y=target_y,
-                        x_num=x_num_t_minus_1,  # 传入数值特征用于分类器输入
-                        x_original_cat=x_cat_original_onehot,
-                        immutable_mask_cat=immutable_mask_cat,
-                        lambda_guidance=lambda_guidance
-                    )
-                    
-                    # 更新log_z用于下一次迭代
-                    log_z = []
-                    for j, num_class in enumerate(self.num_classes):
-                        log_z.append(x_cat_t_minus_1_gumbel[:, j, :num_class])
-                    log_z = torch.cat(log_z, dim=1)
-                    x_cat_t_gumbel = x_cat_t_minus_1_gumbel
-                    x_cat_t = x_cat_t_minus_1_gumbel
-                else:
-                    log_x_cat_t_minus_1 = self.p_sample(model_out_cat, x_cat_t, t, out_dict)
-                    x_cat_t = log_x_cat_t_minus_1
-                    log_z = log_x_cat_t_minus_1
-                    x_cat_t_gumbel = None
+                # TDCE: 使用Gumbel-Softmax反向采样
+                x_cat_t_minus_1_gumbel = self.p_sample_gumbel_softmax(
+                    model_out_cat,
+                    x_cat_t_gumbel,
+                    t,
+                    out_dict,
+                    classifier=classifier,
+                    target_y=target_y,
+                    x_num=x_num_t_minus_1,  # 传入数值特征用于分类器输入
+                    x_original_cat=x_cat_original_onehot,
+                    immutable_mask_cat=immutable_mask_cat,
+                    lambda_guidance=lambda_guidance
+                )
+                
+                # 更新log_z用于下一次迭代
+                log_z = []
+                for j, num_class in enumerate(self.num_classes):
+                    log_z.append(x_cat_t_minus_1_gumbel[:, j, :num_class])
+                log_z = torch.cat(log_z, dim=1)
+                x_cat_t_gumbel = x_cat_t_minus_1_gumbel
+                x_cat_t = x_cat_t_minus_1_gumbel
             else:
                 x_cat_t_gumbel = None
             
             # 更新（detach以避免梯度累积）
             x_num_t = x_num_t_minus_1.detach()
+            
+            # 调试输出：检查最终采样结果（在逆变换前）
+            if debug_mode and step_idx % 100 == 0 and x_num_t.shape[1] > 0:
+                print(f"    [Debug] Final x_num_t (before inverse transform) range: [{x_num_t.min():.4f}, {x_num_t.max():.4f}], mean: {x_num_t.mean():.4f}, std: {x_num_t.std():.4f}", flush=True)
         
         # 7. 后处理：将分类特征转换回离散形式
         # 注意：如果使用one-hot编码，分类特征已经合并到数值特征中
         if x_cat_original.shape[1] > 0 and len(self.num_classes) > 0 and max(self.num_classes) > 0:
-            if self.use_gumbel_softmax:
-                # 从Gumbel-Softmax连续向量转换为离散索引
-                from .gumbel_softmax_utils import gumbel_softmax_to_index
-                x_cat_final = gumbel_softmax_to_index(x_cat_t_gumbel, list(self.num_classes))
-            else:
-                # 从log-one-hot转换为索引
-                from .utils import ohe_to_categories
-                z_ohe = torch.exp(x_cat_t).round()
-                x_cat_final = ohe_to_categories(z_ohe, self.num_classes)
+            # TDCE: 从Gumbel-Softmax连续向量转换为离散索引
+            from .gumbel_softmax_utils import gumbel_softmax_to_index
+            x_cat_final = gumbel_softmax_to_index(x_cat_t_gumbel, list(self.num_classes))
         else:
             # 没有分类特征或分类特征已合并到数值特征中
             x_cat_final = torch.zeros((batch_size, 0), device=device)

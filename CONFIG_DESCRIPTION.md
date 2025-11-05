@@ -1,4 +1,4 @@
-# Description of .toml config for TabDDPM
+# Description of .toml config for TDCE
 First of all, `train.T` and `eval.T` denote preprocessing for training and for evaluation, respectively.  
 
 Here we list non-obvious parameters.  

@@ -6,7 +6,7 @@ import lib
 # Add parent directory to path to import tdce module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tdce.modules import MLPDiffusion, ResNetDiffusion
+from tdce.modules import MLPDiffusion, ResNetDiffusion, UNetDiffusion
 
 def get_model(
     model_name,
@@ -19,8 +19,10 @@ def get_model(
         model = MLPDiffusion(**model_params)
     elif model_name == 'resnet':
         model = ResNetDiffusion(**model_params)
+    elif model_name == 'unet':
+        model = UNetDiffusion(**model_params)
     else:
-        raise "Unknown model!"
+        raise ValueError(f"Unknown model: {model_name}! Supported models: 'mlp', 'resnet', 'unet'")
     return model
 
 def update_ema(target_params, source_params, rate=0.999):

@@ -484,3 +484,261 @@ class ResNetDiffusion(nn.Module):
         if y is not None and self.num_classes > 0:
             emb += self.label_emb(y.squeeze())
         return self.resnet(x, emb)
+
+
+class UNetDiffusion(nn.Module):
+    """
+    TDCE: 表格数据适配的U-Net架构（扁平化，无卷积层）
+    
+    结构：
+    - 编码器：全连接层降维
+    - 解码器：全连接层升维
+    - 跳跃连接：编码器输出直接连接到解码器
+    - 时间嵌入：时间步t的嵌入向量
+    - 条件标签：可选的标签嵌入（is_y_cond）
+    
+    参考论文：Page 17 "the classifier f to be explained shares the same architecture as the U-net in the diffusion model"
+    """
+    
+    def __init__(self, d_in, num_classes, is_y_cond, rtdl_params, dim_t=128):
+        super().__init__()
+        self.dim_t = dim_t
+        self.num_classes = num_classes
+        self.is_y_cond = is_y_cond
+        self.d_in = d_in
+        
+        # 从rtdl_params中获取隐藏层维度
+        # 如果没有指定，使用默认值
+        if 'd_layers' in rtdl_params and len(rtdl_params['d_layers']) > 0:
+            d_hidden = rtdl_params['d_layers'][0]  # 使用第一层隐藏层维度
+        else:
+            d_hidden = 256  # 默认隐藏层维度
+        
+        dropout = rtdl_params.get('dropout', 0.1)
+        
+        # 时间嵌入：时间步t的嵌入向量
+        self.time_embed = nn.Sequential(
+            nn.Linear(dim_t, dim_t),
+            nn.SiLU(),
+            nn.Linear(dim_t, dim_t)
+        )
+        
+        # 条件标签嵌入（如果使用is_y_cond）
+        if self.is_y_cond:
+            if self.num_classes > 0:
+                self.label_emb = nn.Embedding(self.num_classes, dim_t)
+            else:
+                self.label_emb = nn.Linear(1, dim_t)
+        
+        # 输入投影：将输入特征投影到隐藏维度
+        self.input_proj = nn.Linear(d_in, dim_t)
+        
+        # 编码器：降维路径（全连接层）
+        # 编码器层数：根据输入维度自适应
+        # 简单的编码器：d_in -> d_hidden -> d_hidden//2
+        self.encoder = nn.Sequential(
+            nn.Linear(dim_t, d_hidden),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hidden, d_hidden // 2),
+            nn.SiLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # 中间层：处理时间嵌入和条件标签
+        # 将编码器输出与时间嵌入结合
+        self.middle = nn.Sequential(
+            nn.Linear(d_hidden // 2 + dim_t, d_hidden // 2),
+            nn.SiLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # 解码器：升维路径（全连接层）
+        # 解码器输入：编码器输出（跳跃连接）+ 中间层输出
+        # 解码器：d_hidden -> d_hidden -> d_in
+        self.decoder = nn.Sequential(
+            nn.Linear(d_hidden // 2 + d_hidden // 2, d_hidden),  # 跳跃连接
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hidden, d_in)  # 输出维度与输入相同
+        )
+    
+    def forward(self, x, timesteps, y=None):
+        """
+        前向传播
+        
+        Args:
+            x: shape (batch_size, d_in) - 输入特征
+            timesteps: shape (batch_size,) - 时间步索引
+            y: shape (batch_size,) or (batch_size, 1) - 条件标签（可选）
+        
+        Returns:
+            output: shape (batch_size, d_in) - 输出特征（与输入维度相同）
+        """
+        # 1. 时间嵌入
+        t_emb = self.time_embed(timestep_embedding(timesteps, self.dim_t))
+        
+        # 2. 条件标签嵌入（如果使用is_y_cond）
+        if self.is_y_cond and y is not None:
+            if self.num_classes > 0:
+                y = y.squeeze()
+                label_emb = self.label_emb(y)
+            else:
+                if y.dim() > 1:
+                    y = y.reshape(-1, 1)
+                label_emb = self.label_emb(y.float())
+            t_emb = t_emb + F.silu(label_emb)
+        
+        # 3. 输入投影
+        x_proj = self.input_proj(x) + t_emb  # 将时间嵌入加到输入投影中
+        
+        # 4. 编码器：降维
+        x_enc = self.encoder(x_proj)
+        
+        # 5. 中间层：处理编码器输出和时间嵌入
+        x_mid = self.middle(torch.cat([x_enc, t_emb], dim=1))
+        
+        # 6. 解码器：升维（带跳跃连接）
+        # 跳跃连接：将编码器输出直接连接到解码器输入
+        x_dec = self.decoder(torch.cat([x_enc, x_mid], dim=1))
+        
+        return x_dec
+
+
+class UNetClassifier(nn.Module):
+    """
+    TDCE: 基于U-Net架构的分类器
+    
+    分类器应该与去噪网络使用相同的U-Net架构（Page 17），
+    但输出层改为分类头（输出类别概率）。
+    
+    结构：
+    - 使用UNetDiffusion的编码器-解码器结构
+    - 在解码器后添加分类头（输出类别数量）
+    """
+    
+    def __init__(self, d_in, num_classes, is_y_cond, rtdl_params, dim_t=128, num_output_classes=2):
+        super().__init__()
+        self.dim_t = dim_t
+        self.num_classes = num_classes
+        self.is_y_cond = is_y_cond
+        self.d_in = d_in
+        self.num_output_classes = num_output_classes
+        
+        # 从rtdl_params中获取隐藏层维度
+        if 'd_layers' in rtdl_params and len(rtdl_params['d_layers']) > 0:
+            d_hidden = rtdl_params['d_layers'][0]
+        else:
+            d_hidden = 256
+        
+        dropout = rtdl_params.get('dropout', 0.1)
+        
+        # 时间嵌入（分类器中不使用时间步，但保留接口兼容性）
+        self.time_embed = nn.Sequential(
+            nn.Linear(dim_t, dim_t),
+            nn.SiLU(),
+            nn.Linear(dim_t, dim_t)
+        )
+        
+        # 条件标签嵌入（如果使用is_y_cond）
+        if self.is_y_cond:
+            if self.num_classes > 0:
+                self.label_emb = nn.Embedding(self.num_classes, dim_t)
+            else:
+                self.label_emb = nn.Linear(1, dim_t)
+        
+        # 输入投影
+        self.input_proj = nn.Linear(d_in, dim_t)
+        
+        # 编码器：降维路径（与UNetDiffusion相同）
+        self.encoder = nn.Sequential(
+            nn.Linear(dim_t, d_hidden),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hidden, d_hidden // 2),
+            nn.SiLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # 中间层：处理编码器输出
+        self.middle = nn.Sequential(
+            nn.Linear(d_hidden // 2, d_hidden // 2),
+            nn.SiLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # 解码器：升维路径（与UNetDiffusion相同）
+        self.decoder = nn.Sequential(
+            nn.Linear(d_hidden // 2 + d_hidden // 2, d_hidden),  # 跳跃连接
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hidden, d_hidden // 2),  # 输出到隐藏维度的一半
+            nn.SiLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # 分类头：输出类别概率
+        self.classifier_head = nn.Sequential(
+            nn.Linear(d_hidden // 2, d_hidden // 4),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hidden // 4, num_output_classes)  # 输出类别数量
+        )
+    
+    def forward(self, x, timesteps=None, y=None):
+        """
+        前向传播
+        
+        Args:
+            x: shape (batch_size, d_in) - 输入特征
+            timesteps: shape (batch_size,) - 时间步索引（分类器中不使用，但保留接口兼容性）
+            y: shape (batch_size,) or (batch_size, 1) - 条件标签（可选）
+        
+        Returns:
+            logits: shape (batch_size, num_output_classes) - 分类logits
+        """
+        # 如果提供了时间步，使用时间嵌入（用于与UNetDiffusion兼容）
+        # 否则使用零向量作为时间嵌入
+        if timesteps is not None:
+            # 确保timestep_embedding的输出与x的dtype一致
+            t_emb_raw = timestep_embedding(timesteps, self.dim_t)
+            t_emb = self.time_embed(t_emb_raw.to(dtype=x.dtype))
+        else:
+            # 分类器不使用时间步，使用零向量
+            # 确保dtype与x一致
+            batch_size = x.shape[0]
+            t_emb = torch.zeros(batch_size, self.dim_t, device=x.device, dtype=x.dtype)
+        
+        # 条件标签嵌入（如果使用is_y_cond）
+        if self.is_y_cond and y is not None:
+            if self.num_classes > 0:
+                y = y.squeeze()
+                label_emb = self.label_emb(y)
+            else:
+                if y.dim() > 1:
+                    y = y.reshape(-1, 1)
+                label_emb = self.label_emb(y.float())
+            # 确保label_emb的dtype与t_emb一致
+            t_emb = t_emb + F.silu(label_emb.to(dtype=t_emb.dtype))
+        
+        # 输入投影
+        # 确保x的dtype与模型权重一致，并确保t_emb的dtype与x一致
+        # 获取模型权重的dtype
+        weight_dtype = next(self.input_proj.parameters()).dtype
+        x = x.to(dtype=weight_dtype)
+        t_emb = t_emb.to(dtype=weight_dtype)
+        x_proj = self.input_proj(x) + t_emb
+        
+        # 编码器：降维
+        x_enc = self.encoder(x_proj)
+        
+        # 中间层：处理编码器输出
+        x_mid = self.middle(x_enc)
+        
+        # 解码器：升维（带跳跃连接）
+        x_dec = self.decoder(torch.cat([x_enc, x_mid], dim=1))
+        
+        # 分类头：输出类别logits
+        logits = self.classifier_head(x_dec)
+        
+        return logits

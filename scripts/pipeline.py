@@ -1,3 +1,10 @@
+"""
+TDCE: 训练和采样管道脚本
+
+用于训练扩散模型、生成样本和评估的通用管道。
+支持TDCE的所有功能，包括Gumbel-Softmax扩散和分类器引导。
+"""
+
 import tomli
 import shutil
 import os

@@ -18,7 +18,7 @@ from scripts.utils_train import make_dataset
 def prepare_original_samples(
     data_path: str,
     config_path: str,
-    num_samples: int = 100,
+    num_samples: int = 1000,
     output_path: str = 'original_samples.npy',
     split: str = 'test'
 ):
@@ -94,8 +94,8 @@ def main():
                        help='数据路径')
     parser.add_argument('--config', type=str, required=True,
                        help='配置文件路径（.toml格式）')
-    parser.add_argument('--num_samples', type=int, default=100,
-                       help='要选择的样本数量（默认：100）')
+    parser.add_argument('--num_samples', type=int, default=1000,
+                       help='要选择的样本数量（默认：1000，论文要求：每个数据集的测试集为1000条，每个样本生成1个反事实）')
     parser.add_argument('--output', type=str, default='original_samples.npy',
                        help='输出文件路径（默认：original_samples.npy）')
     parser.add_argument('--split', type=str, default='test',

@@ -232,17 +232,22 @@ def compute_distance_gradient(
 def compute_guided_gradient(
     g_classifier: torch.Tensor,
     g_distance: torch.Tensor,
-    lambda_guidance: float = 1.0
+    lambda_guidance: float = 1.0  # 保留参数以保持兼容性，但按照论文公式，实际不使用
 ) -> torch.Tensor:
     """
     归一化组合分类器梯度和距离约束梯度
     
-    公式：g_guided = (g_classifier / ||g_classifier||) - λ * (g_distance / ||g_distance||)
+    论文公式（Page 12，Equation 10）：
+    g_guided = ∇logp_φ(y|f_dn(x_t)) / ||∇logp_φ(y|f_dn(x_t))|| 
+               - ∇d(x, f_dn(x_t)) / ||∇d(x, f_dn(x_t))||
+    
+    注意：论文中没有lambda参数，是直接相减。代码中保留lambda_guidance参数
+    以保持向后兼容，但按照论文严格实现，应该固定为1.0（即不使用）。
     
     Args:
         g_classifier: shape (batch_size, num_features) - 分类器梯度
         g_distance: shape (batch_size, num_features) - 距离约束梯度
-        lambda_guidance: 引导权重（控制距离约束的强度）
+        lambda_guidance: 引导权重（论文中为1.0，即不使用）
     
     Returns:
         g_guided: shape (batch_size, num_features) - 归一化后的引导梯度
@@ -257,10 +262,11 @@ def compute_guided_gradient(
         torch.norm(g_distance, dim=1, keepdim=True) + 1e-8
     )
     
-    # 组合梯度
-    # 注意：这里使用减法，因为我们希望减少距离（朝向原始样本），
-    # 同时增加目标类概率（朝向目标类）
-    g_guided = g_classifier_norm - lambda_guidance * g_distance_norm
+    # 组合梯度（严格按照论文公式：直接相减，没有lambda）
+    # 论文公式：g_guided = g_classifier_norm - g_distance_norm
+    # 注意：lambda_guidance参数保留是为了向后兼容，但按照论文应该设为1.0
+    # 如果lambda_guidance != 1.0，会偏离论文公式
+    g_guided = g_classifier_norm - g_distance_norm
     
     return g_guided
 

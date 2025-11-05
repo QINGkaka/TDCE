@@ -1,13 +1,14 @@
 seed = 0
 parent_dir = "exp/adult/tdce_test"
 real_data_path = "data/adult"
-model_type = "mlp"
+model_type = "unet"  
 num_numerical_features = 4
 device = "cuda:0"
 
 [model_params]
 num_classes = 2
 is_y_cond = true
+classifier_model_type = "unet"  
 
 [model_params.rtdl_params]
 d_layers = [256, 512]
@@ -17,7 +18,7 @@ dropout = 0.0
 num_timesteps = 1000
 gaussian_loss_type = "mse"
 scheduler = "cosine"
-use_gumbel_softmax = true
+# TDCE始终使用Gumbel-Softmax处理分类特征
 tau_init = 1.0
 tau_final = 0.3
 tau_schedule = "anneal"
@@ -30,10 +31,10 @@ batch_size = 1024
 
 [train.T]
 seed = 0
-normalization = "quantile"
+normalization = "standard"  # 论文要求：使用standardization（代码库中参数名为"standard"）
 num_nan_policy = "__none__"
 cat_nan_policy = "__none__"
 cat_min_frequency = "__none__"
-cat_encoding = "one-hot"
+cat_encoding = "one-hot"  # 论文要求：one-hot编码
 y_policy = "default"
 

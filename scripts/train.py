@@ -96,7 +96,7 @@ def train(
     device = torch.device('cuda:1'),
     seed = 0,
     change_val = False,
-    use_gumbel_softmax = True,
+    # TDCE always uses Gumbel-Softmax (parameter removed, always True)
     tau_init = 1.0,
     tau_final = 0.3,
     tau_schedule = 'anneal'
@@ -127,9 +127,13 @@ def train(
     print(d_in)
     
     print(model_params)
+    
+    # 移除分类器专用参数（这些参数不应该传递给扩散模型）
+    model_params_clean = {k: v for k, v in model_params.items() if k != 'classifier_model_type'}
+    
     model = get_model(
         model_type,
-        model_params,
+        model_params_clean,
         num_numerical_features,
         category_sizes=dataset.get_category_sizes('train')
     )
@@ -148,7 +152,7 @@ def train(
         num_timesteps=num_timesteps,
         scheduler=scheduler,
         device=device,
-        use_gumbel_softmax=use_gumbel_softmax,
+        # TDCE always uses Gumbel-Softmax
         tau_init=tau_init,
         tau_final=tau_final,
         tau_schedule=tau_schedule

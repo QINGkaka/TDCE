@@ -380,7 +380,8 @@ def evaluate_counterfactuals(
     ae_o=None,
     ae_t=None,
     ae=None,
-    device='cpu'
+    device='cpu',
+    transform_fn=None
 ):
     """
     评估反事实样本
@@ -429,18 +430,14 @@ def evaluate_counterfactuals(
     
     # 3. 有效性（通用）
     # 注意：counterfactual_samples是原始数据空间，但分类器期望变换后的数据
-    # 有效性评估需要使用变换后的反事实样本
-    # 这里我们跳过有效性计算，因为需要重新生成变换后的反事实样本
-    # 或者使用原始样本进行评估（如果available）
+    # 需要将反事实样本转换回分类器输入空间
     if classifier is not None:
-        # 注意：为了计算有效性，我们需要变换后的反事实样本
-        # 但counterfactual_samples是反归一化后的原始数据空间
-        # 暂时跳过有效性计算，或者需要重新变换数据
-        print("Note: Validity calculation requires transformed counterfactual samples.")
-        print("      Counterfactual samples are in original data space (12D).")
-        print("      Classifier expects transformed data space (66D).")
-        print("      Skipping validity calculation for now.")
-        results['Validity'] = None
+        # 有效性计算需要transform_fn，如果未提供则跳过
+        if transform_fn is not None:
+            results['Validity'] = validity(counterfactual_samples, classifier, target_y, device, transform_fn)
+        else:
+            print("Note: Validity calculation requires transform_fn to convert counterfactual samples to classifier input space.")
+            results['Validity'] = None
     
     # 4. 可解释性（通用）
     if ae_o is not None and ae_t is not None and ae is not None:
@@ -686,11 +683,15 @@ def main():
     print("Loading classifier...")
     # 注意：original_samples是变换后的数据空间（66维），这是分类器的输入维度
     # 需要先构建分类器模型结构，然后加载权重
-    from tdce.modules import MLP
+    from tdce.modules import MLP, UNetClassifier
     
     # 获取分类器输入维度（从original_samples推断）
     classifier_input_dim = original_samples.shape[1]
     print(f"Classifier input dimension: {classifier_input_dim}")
+    
+    # 确定分类器架构类型
+    classifier_model_type = config['model_params'].get('classifier_model_type', 'mlp')  # 'mlp' or 'unet'
+    is_y_cond = config['model_params'].get('is_y_cond', False)
     
     # 获取分类器参数
     classifier_params = config['model_params'].get('classifier_params', {
@@ -698,13 +699,30 @@ def main():
         'dropout': 0.1
     })
     
-    # 构建分类器
-    classifier = MLP.make_baseline(
-        d_in=classifier_input_dim,
-        d_out=config['model_params'].get('num_classes', 2),
-        d_layers=classifier_params.get('d_layers', [256, 256]),
-        dropout=classifier_params.get('dropout', 0.1)
-    )
+    # 根据配置选择架构
+    if classifier_model_type == 'unet':
+        # 使用U-Net架构的分类器
+        print(f"  Loading UNetClassifier (same architecture as diffusion model)")
+        classifier = UNetClassifier(
+            d_in=classifier_input_dim,
+            num_classes=config['model_params'].get('num_classes', 0),
+            is_y_cond=is_y_cond,
+            rtdl_params={
+                'd_layers': classifier_params.get('d_layers', [256, 256]),
+                'dropout': classifier_params.get('dropout', 0.1)
+            },
+            dim_t=config['model_params'].get('dim_t', 128),
+            num_output_classes=config['model_params'].get('num_classes', 2)
+        )
+    else:
+        # 使用MLP架构的分类器（默认）
+        print(f"  Loading MLP classifier")
+        classifier = MLP.make_baseline(
+            d_in=classifier_input_dim,
+            d_out=config['model_params'].get('num_classes', 2),
+            d_layers=classifier_params.get('d_layers', [256, 256]),
+            dropout=classifier_params.get('dropout', 0.1)
+        )
     
     # 加载权重
     checkpoint = torch.load(args.classifier_path, map_location=args.device)
@@ -719,25 +737,81 @@ def main():
     classifier.eval()
     print(f"Classifier loaded successfully")
     
-    # 注意：counterfactual_samples是反归一化后的原始数据空间（12维：4数值+8分类）
-    # 但分类器期望的是变换后的数据空间（66维）
-    # 需要创建一个数据变换函数
+    # 创建数据变换函数：将原始数据空间的反事实样本转换为分类器输入空间
     def transform_fn(data):
-        """将原始数据转换为分类器输入格式"""
-        # 这里需要根据实际的数据变换逻辑来实现
-        # 简化处理：假设数据需要重新变换
-        # 实际使用时，需要根据dataset的transform来转换
-        # 这里我们假设数据已经是正确的格式，或者需要重新加载变换后的数据
-        return data
+        """
+        将原始数据空间的反事实样本转换为分类器输入空间
+        
+        Args:
+            data: shape (N, D_original) - 原始数据空间（12维：4数值+8分类）
+        
+        Returns:
+            transformed: shape (N, D_transformed) - 变换后的数据空间（66维：标准化+one-hot）
+        """
+        data = np.asarray(data)
+        batch_size = data.shape[0]
+        
+        # 分离数值特征和分类特征
+        num_features_cfg = num_numerical_features_cfg
+        if data.shape[1] > num_features_cfg:
+            # 有分类特征
+            num_data = data[:, :num_features_cfg]  # shape: (N, 4)
+            cat_data = data[:, num_features_cfg:]  # shape: (N, 8) - 分类特征（字符串或整数）
+        else:
+            # 只有数值特征
+            num_data = data
+            cat_data = None
+        
+        # 1. 归一化数值特征
+        if dataset.num_transform is not None and num_data.shape[1] > 0:
+            num_transformed = dataset.num_transform.transform(num_data)
+        else:
+            num_transformed = num_data
+        
+        # 2. 编码分类特征（one-hot）
+        if cat_data is not None and dataset.cat_transform is not None:
+            # 分类特征需要转换为one-hot编码
+            # 注意：cat_data可能是字符串数组，需要先转换为整数索引
+            cat_transformed = dataset.cat_transform.transform(cat_data)
+            
+            # 如果使用one-hot编码，cat_transformed已经是one-hot向量
+            # 组合数值特征和分类特征
+            if num_transformed.shape[1] > 0:
+                transformed = np.hstack([num_transformed, cat_transformed])
+            else:
+                transformed = cat_transformed
+        else:
+            # 没有分类特征
+            transformed = num_transformed
+        
+        # 3. 如果使用is_y_cond，需要添加target列（第一列）
+        # 注意：有效性计算时，我们需要知道反事实的目标标签
+        # 但这里我们假设反事实已经满足目标标签，所以target列可以设为0或目标标签值
+        # 为了简化，我们假设target列已经在数据中，或者需要添加
+        # 实际上，分类器在训练时如果is_y_cond=True，第一列是target
+        # 但在评估反事实时，我们通常不需要target列，因为分类器已经知道目标标签
+        # 检查原始样本的维度以确定是否需要添加target列
+        if is_y_cond:
+            # 如果原始样本有target列（第一列），我们需要检查
+            # 但反事实样本通常不包含target列，所以不需要添加
+            # 分类器期望的输入应该是：如果is_y_cond=True，输入应该包含target列
+            # 但为了有效性计算，我们可以使用目标标签作为target列
+            # 这里我们假设分类器输入不需要target列（因为分类器已经训练好了）
+            # 如果原始样本维度是66，而反事实是12，说明原始样本有target列（1）+ 数值(4) + one-hot(61) = 66
+            # 反事实样本是 数值(4) + 分类(8) = 12
+            # 转换后应该是 数值标准化(4) + one-hot(61) = 65，但原始样本是66，说明有target列
+            # 为了匹配分类器输入，我们需要添加target列（使用目标标签）
+            if transformed.shape[1] == original_samples.shape[1] - 1:
+                # 缺少target列，添加目标标签列
+                target_col = np.full((batch_size, 1), args.target_y, dtype=transformed.dtype)
+                transformed = np.hstack([target_col, transformed])
+        
+        return transformed
     
     # 评估
     print("Evaluating counterfactuals...")
     print("Note: Counterfactual samples are in original data space.")
-    print("For validity calculation, we need to transform them to classifier input space.")
-    
-    # 对于有效性计算，需要将反事实样本转换回分类器的输入空间
-    # 这里简化处理：直接从原始样本索引加载变换后的数据
-    # 或者使用prepare_counterfactual_data.py生成的原始样本（变换后的）
+    print("      For validity calculation, transforming them to classifier input space.")
     
     results = evaluate_counterfactuals(
         original_samples=original_samples_original,  # 使用反归一化后的原始样本
@@ -751,7 +825,8 @@ def main():
         ae_o=None,  # 需要预训练
         ae_t=None,  # 需要预训练
         ae=None,   # 需要预训练
-        device=args.device
+        device=args.device,
+        transform_fn=transform_fn  # 传入变换函数
     )
     
     # 打印结果

@@ -439,7 +439,7 @@ def process_data(name):
 
     info['metadata'] = metadata
 
-    # TDCE: Add n_classes field for TabDDPM compatibility
+    # TDCE: Add n_classes field for compatibility
     if task_type == 'binclass':
         info['n_classes'] = 2
     elif task_type == 'multiclass':
